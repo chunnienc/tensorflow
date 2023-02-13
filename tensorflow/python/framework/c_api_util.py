@@ -20,6 +20,7 @@ from tensorflow.core.framework import graph_pb2
 from tensorflow.core.framework import node_def_pb2
 from tensorflow.core.framework import api_def_pb2
 from tensorflow.core.framework import op_def_pb2
+from tensorflow.core.framework import function_pb2
 from tensorflow.python.client import pywrap_tf_session as c_api
 from tensorflow.python.util import compat
 from tensorflow.python.util import tf_contextlib
@@ -251,10 +252,10 @@ def parse_from_flat_graph_def(data):
   def _unpack_serialized_proto():
     nonlocal data
     size_t_len = struct.calcsize('N')
-    (length,) = struct.unpack('N', data[:size_t_len])
-    assert size_t_len + length <= len(data)
+    (proto_len,) = struct.unpack('N', data[:size_t_len])
+    assert size_t_len + proto_len <= len(data)
     data = data[size_t_len:]
-    proto, data = data[:length], data[length:]
+    proto, data = data[:proto_len], data[proto_len:]
     return proto
 
   graph_data = _unpack_serialized_proto()
@@ -267,6 +268,26 @@ def parse_from_flat_graph_def(data):
     graph.node.append(node)
   return graph
 
+def parse_from_flat_function_def(data):
+
+  def _unpack_serialized_proto():
+    nonlocal data
+    size_t_len = struct.calcsize('N')
+    (proto_len,) = struct.unpack('N', data[:size_t_len])
+    assert size_t_len + proto_len <= len(data)
+    data = data[size_t_len:]
+    proto, data = data[:proto_len], data[proto_len:]
+    return proto
+
+  func_data = _unpack_serialized_proto()
+  func = function_pb2.FunctionDef()
+  func.ParseFromString(func_data)
+  while data:
+    node = node_def_pb2.NodeDef()
+    node_data = _unpack_serialized_proto()
+    node.ParseFromString(node_data)
+    func.node_def.append(node)
+  return func
 
 def tf_output(c_op, index):
   """Returns a wrapped TF_Output with specified operation and index.

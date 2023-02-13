@@ -953,6 +953,16 @@ PYBIND11_MODULE(_pywrap_tf_session, m) {
           tensorflow::MaybeRaiseRegisteredFromTFStatusWithGIL(status.get());
         });
 
+  m.def("TF_FunctionToFlatFunctionDef", [](TF_Function* graph,
+                                           TF_Buffer* output_flat_func_def) {
+    tensorflow::Safe_TF_StatusPtr status =
+        tensorflow::make_safe(TF_NewStatus());
+    // Release GIL.
+    py::gil_scoped_release release;
+    TF_FunctionToFlatFunctionDef(graph, output_flat_func_def, status.get());
+    tensorflow::MaybeRaiseRegisteredFromTFStatusWithGIL(status.get());
+  });
+
   m.def("TF_GraphCopyFunction",
         [](TF_Graph* graph, const TF_Function* func, const TF_Function* grad) {
           tensorflow::Safe_TF_StatusPtr status =

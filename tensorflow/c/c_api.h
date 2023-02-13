@@ -1173,6 +1173,9 @@ TF_CAPI_EXPORT extern void TF_FunctionToFunctionDef(TF_Function* func,
                                                     TF_Buffer* output_func_def,
                                                     TF_Status* status);
 
+TF_CAPI_EXPORT extern void TF_FunctionToFlatFunctionDef(
+    TF_Function* func, TF_Buffer* output_flat_func_def, TF_Status* status);
+
 // Construct and return the function whose FunctionDef representation is
 // serialized in `proto`. `proto_len` must equal the number of bytes
 // pointed to by `proto`.

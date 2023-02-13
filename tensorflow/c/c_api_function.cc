@@ -291,6 +291,58 @@ void TF_FunctionToFunctionDef(TF_Function* func, TF_Buffer* output_func_def,
   status->status = MessageToBuffer(func->fdef, output_func_def);
 }
 
+namespace tensorflow {
+
+Status FunctionToFlatFunctionDefBuffer(FunctionDef fdef, TF_Buffer* out) {
+  size_t nodes_buf_size = 0;
+  for (const NodeDef& node : fdef.node_def()) {
+    nodes_buf_size += sizeof(size_t) + node.ByteSizeLong();
+  }
+
+  std::vector<uint8> nodes_buf_vec(nodes_buf_size);
+  uint8* nodes_buf_it = nodes_buf_vec.data();
+  for (const NodeDef& node : fdef.node_def()) {
+    size_t node_size = node.ByteSizeLong();
+    *reinterpret_cast<size_t*>(nodes_buf_it) = node_size;
+    nodes_buf_it += sizeof(size_t);
+    if (!node.SerializeWithCachedSizesToArray(nodes_buf_it)) {
+      return errors::InvalidArgument("Unable to serialize ", node.GetTypeName(),
+                                     " protocol buffer");
+    }
+    nodes_buf_it += node_size;
+  }
+
+  fdef.clear_node_def();
+  size_t func_info_size = fdef.ByteSizeLong();
+  size_t tf_buf_size = sizeof(size_t) + func_info_size + nodes_buf_size;
+
+  uint8* tf_buf = reinterpret_cast<uint8*>(port::Malloc(tf_buf_size));
+  if (tf_buf == nullptr) {
+    return tensorflow::errors::ResourceExhausted(
+        "Failed to allocate memory to serialize flat graph def");
+  }
+
+  *reinterpret_cast<size_t*>(tf_buf) = func_info_size;
+  if (!fdef.SerializeWithCachedSizesToArray(tf_buf + sizeof(size_t))) {
+    port::Free(tf_buf);
+    return errors::InvalidArgument("Unable to serialize ", fdef.GetTypeName(),
+                                   " protocol buffer");
+  }
+  memcpy(tf_buf + sizeof(size_t) + func_info_size, nodes_buf_vec.data(),
+         nodes_buf_size);
+  out->data = tf_buf;
+  out->length = tf_buf_size;
+  out->data_deallocator = [](void* data, size_t length) { port::Free(data); };
+  return OkStatus();
+}
+
+}  // namespace tensorflow
+
+void TF_FunctionToFlatFunctionDef(TF_Function* func, TF_Buffer* output_func_def,
+                                  TF_Status* status) {
+  status->status = FunctionToFlatFunctionDefBuffer(func->fdef, output_func_def);
+}
+
 TF_Function* TF_FunctionImportFunctionDef(const void* proto, size_t proto_len,
                                           TF_Status* status) {
   TF_Function* func = new TF_Function();
