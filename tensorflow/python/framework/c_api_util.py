@@ -12,10 +12,12 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 # ==============================================================================
-
 """Utilities for using the TensorFlow C API."""
 
 import contextlib
+import struct
+from tensorflow.core.framework import graph_pb2
+from tensorflow.core.framework import node_def_pb2
 from tensorflow.core.framework import api_def_pb2
 from tensorflow.core.framework import op_def_pb2
 from tensorflow.python.client import pywrap_tf_session as c_api
@@ -227,6 +229,43 @@ def tf_buffer(data=None):
     yield buf
   finally:
     c_api.TF_DeleteBuffer(buf)
+
+
+def serialize_to_flat_graph_def(graph_def):
+  nodes = [*graph_def.node]
+  del graph_def.node[:]
+
+  data = b''
+  graph_data = compat.as_bytes(graph_def.SerializeToString())
+  data += struct.pack('N', len(graph_data)) + graph_data
+  for node in nodes:
+    node_data = compat.as_bytes(node.SerializeToString())
+    data += struct.pack('N', len(node_data)) + node_data
+
+  graph_def.node.extend(nodes)
+  return data
+
+
+def parse_from_flat_graph_def(data):
+
+  def _unpack_serialized_proto():
+    nonlocal data
+    size_t_len = struct.calcsize('N')
+    (length,) = struct.unpack('N', data[:size_t_len])
+    assert size_t_len + length <= len(data)
+    data = data[size_t_len:]
+    proto, data = data[:length], data[length:]
+    return proto
+
+  graph_data = _unpack_serialized_proto()
+  graph = graph_pb2.GraphDef()
+  graph.ParseFromString(graph_data)
+  while data:
+    node = node_def_pb2.NodeDef()
+    node_data = _unpack_serialized_proto()
+    node.ParseFromString(node_data)
+    graph.node.append(node)
+  return graph
 
 
 def tf_output(c_op, index):

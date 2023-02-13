@@ -3525,10 +3525,10 @@ class Graph(object):
     with self._lock:
       with c_api_util.tf_buffer() as buf:
         with self._c_graph.get() as c_graph:
-          pywrap_tf_session.TF_GraphToGraphDef(c_graph, buf)
+          pywrap_tf_session.TF_GraphToFlatGraphDef(c_graph, buf)
           data = pywrap_tf_session.TF_GetBuffer(buf)
-      graph = graph_pb2.GraphDef()
-      graph.ParseFromString(compat.as_bytes(data))
+      graph = c_api_util.parse_from_flat_graph_def(data)
+      
       # Strip the experimental library field iff it's empty.
       if not graph.library.function:
         graph.ClearField("library")
