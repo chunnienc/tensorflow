@@ -246,6 +246,20 @@ def serialize_to_flat_graph_def(graph_def):
   graph_def.node.extend(nodes)
   return data
 
+def serialize_to_flat_meta_graph_def(meta_graph_def):
+  nodes = [*meta_graph_def.graph_def.node]
+  del meta_graph_def.graph_def.node[:]
+
+  data = b''
+  graph_data = compat.as_bytes(meta_graph_def.SerializeToString())
+  data += struct.pack('N', len(graph_data)) + graph_data
+  for node in nodes:
+    node_data = compat.as_bytes(node.SerializeToString())
+    data += struct.pack('N', len(node_data)) + node_data
+
+  meta_graph_def.graph_def.node.extend(nodes)
+  return data
+
 
 def parse_from_flat_graph_def(data):
 

@@ -262,6 +262,7 @@ tf_python_pybind_extension(
         "//tensorflow/core:protos_all_cc",
         "//tensorflow/core/common_runtime:core_cpu_headers_lib",
         "//tensorflow/core/common_runtime/gpu:gpu_id",
+        "//tensorflow/core/platform:errors",
         "//tensorflow/python/lib/core:pybind11_status",
         "@pybind11",
     ],
