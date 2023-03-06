@@ -26,11 +26,18 @@ limitations under the License.
 #include <utility>
 
 #include "absl/base/call_once.h"
+#include "absl/functional/function_ref.h"
+#include "absl/status/status.h"
 #include "absl/strings/cord.h"
 #include "absl/strings/escaping.h"
 #include "absl/strings/match.h"
+#include "absl/strings/str_cat.h"
+#include "absl/strings/str_join.h"
+#include "absl/strings/str_replace.h"
+#include "absl/strings/str_split.h"
 #include "absl/types/optional.h"
 #include "tensorflow/tsl/platform/mutex.h"
+#include "tensorflow/tsl/platform/stack_frame.h"
 #include "tensorflow/tsl/platform/stacktrace.h"
 #include "tensorflow/tsl/platform/str_util.h"
 #include "tensorflow/tsl/platform/strcat.h"
@@ -123,30 +130,49 @@ static constexpr const char kStackTraceProtoUrl[] =
     "type.googleapis.com/tensorflow.StackTracePayload";
 
 void SetStackTrace(::tsl::Status& status, std::vector<StackFrame> stack_trace) {
-  status.SetStackTrace(stack_trace);
+  // Given the StackFrame fields are (a) line number (b) filename (c) function
+  // name, we can safely assume that there is no `\n` in there.
+  // Thus, we can serialize as strings using a simple new line delimiter.
+  //
+  // This has the benefit that we don't need to depend on protobuf. Note that
+  // we do this only the serialization of the StackFrame is an implementation
+  // detail and that we don't not need persistent storage or wire serialization.
+  std::vector<std::string> items;
+  items.reserve(stack_trace.size());
+  for (StackFrame& frame : stack_trace) {
+    // We are extra safe and remove any new line in the filename and function
+    // name.
+    items.push_back(
+        absl::StrCat(absl::StrReplaceAll(frame.file_name, {{"\n", ""}}), "\n",
+                     frame.line_number, "\n",
+                     absl::StrReplaceAll(frame.function_name, {{"\n", ""}})));
+  }
+  status.SetPayload(kStackTraceProtoUrl,
+                    absl::Cord(absl::StrJoin(items, "\n")));
 }
 
 std::vector<StackFrame> GetStackTrace(const ::tsl::Status& status) {
-  return status.GetStackTrace();
+  std::vector<StackFrame> stack_trace;
+  absl::optional<absl::Cord> maybe_serialized_payload =
+      status.GetPayload(kStackTraceProtoUrl);
+  if (maybe_serialized_payload.has_value()) {
+    std::vector<std::string> split =
+        absl::StrSplit(maybe_serialized_payload.value().Flatten(), '\n');
+    assert(split.size() % 3 == 0);
+    for (int i = 0; i < split.size() / 3; ++i) {
+      const int idx = 3 * i;
+      int line_number = -1;
+      CHECK(absl::SimpleAtoi(split[idx + 1], &line_number));  // Crash OK
+      stack_trace.emplace_back(std::move(split[idx]), line_number,
+                               std::move(split[idx + 2]));
+    }
+  }
+  return stack_trace;
 }
 
 }  // namespace errors
 
 Status::~Status() {}
-
-void Status::SetStackTrace(std::vector<StackFrame> stack_trace) {
-  if (state_ != nullptr) {
-    state_->stack_trace = stack_trace;
-  }
-}
-
-std::vector<StackFrame> Status::GetStackTrace() const {
-  if (state_ != nullptr) {
-    return state_->stack_trace;
-  } else {
-    return std::vector<StackFrame>();
-  }
-}
 
 absl::Span<const SourceLocation> Status::GetSourceLocations() const {
   return state_ != nullptr ? state_->source_locations
@@ -169,11 +195,22 @@ void Status::MaybeAddSourceLocation(SourceLocation loc) {
   state_->source_locations.push_back(loc);
 }
 
-Status::Status(tsl::error::Code code, absl::string_view msg,
+Status::Status(tsl::errors::Code code, absl::string_view msg,
                SourceLocation loc) {
-  assert(code != tsl::error::OK);
+  assert(code != tsl::errors::Code::OK);
   state_ = std::make_unique<State>();
-  state_->code = code;
+  state_->code = static_cast<tsl::error::Code>(code);
+  state_->msg = std::string(msg);
+  MaybeAddSourceLocation(loc);
+  VLOG(5) << "Generated non-OK status: \"" << *this << "\". "
+          << CurrentStackTrace();
+}
+
+Status::Status(absl::StatusCode code, absl::string_view msg,
+               SourceLocation loc) {
+  assert(code != absl::StatusCode::kOk);
+  state_ = std::make_unique<State>();
+  state_->code = static_cast<tsl::error::Code>(code);
   state_->msg = std::string(msg);
   MaybeAddSourceLocation(loc);
   VLOG(5) << "Generated non-OK status: \"" << *this << "\". "
@@ -308,11 +345,11 @@ bool Status::ErasePayload(absl::string_view type_url) {
 }
 
 void Status::ForEachPayload(
-    const std::function<void(absl::string_view, absl::string_view)>& visitor)
+    absl::FunctionRef<void(absl::string_view, const absl::Cord&)> visitor)
     const {
   if (ok()) return;
   for (const auto& payload : state_->payloads) {
-    visitor(payload.first, std::string(payload.second));
+    visitor(payload.first, payload.second);
   }
 }
 
@@ -348,8 +385,8 @@ absl::Status ToAbslStatus(const ::tsl::Status& s, SourceLocation loc) {
 
   absl::Status converted = internal::MakeAbslStatus(
       s.code(), s.error_message(), s.GetSourceLocations(), loc);
-  s.ForEachPayload([&converted](tsl::StringPiece key, tsl::StringPiece value) {
-    converted.SetPayload(key, absl::Cord(value));
+  s.ForEachPayload([&converted](tsl::StringPiece key, const absl::Cord& value) {
+    converted.SetPayload(key, value);
   });
 
   return converted;
@@ -415,8 +452,8 @@ static constexpr int kMaxAttachedLogMessageSize = 512;
 std::unordered_map<std::string, absl::Cord> StatusGroup::GetPayloads() const {
   std::unordered_map<std::string, absl::Cord> payloads;
   auto capture_payload = [&payloads](absl::string_view key,
-                                     absl::string_view value) {
-    payloads[std::string(key)] = absl::Cord(value);
+                                     const absl::Cord& value) {
+    payloads[std::string(key)] = value;
   };
   for (const auto& status : derived_) {
     status.ForEachPayload(capture_payload);

@@ -415,6 +415,10 @@ TEST(OpVersionTest, VersioningReduceMaxTest) {
   SimpleVersioningTestExtended(BuiltinOperator_REDUCE_MAX);
 }
 
+TEST(OpVersionTest, VersioningMirrorPadTest) {
+  SimpleVersioningTestExtended(BuiltinOperator_MIRROR_PAD);
+}
+
 TEST(OpVersionTest, VersioningReduceProdTest) {
   OpSignature fake_op_sig;
   fake_op_sig.op = BuiltinOperator_REDUCE_PROD;
@@ -693,6 +697,26 @@ TEST(OpVersionTest, VersioningFloorDivOperatorTest) {
   fake_op_sig = {
       .op = BuiltinOperator_FLOOR_DIV,
       .inputs = CreateOpSignatureTensorSpecs(kTfLiteFloat32),
+  };
+  EXPECT_EQ(GetBuiltinOperatorVersion(fake_op_sig), 2);
+
+  fake_op_sig = {
+      .op = BuiltinOperator_FLOOR_DIV,
+      .inputs = CreateOpSignatureTensorSpecs(kTfLiteInt16),
+  };
+  EXPECT_EQ(GetBuiltinOperatorVersion(fake_op_sig), 3);
+}
+
+TEST(OpVersionTest, VersioningFloorModOperatorTest) {
+  OpSignature fake_op_sig = {
+      .op = BuiltinOperator_FLOOR_MOD,
+      .inputs = CreateOpSignatureTensorSpecs(kTfLiteInt32),
+  };
+  EXPECT_EQ(GetBuiltinOperatorVersion(fake_op_sig), 1);
+
+  fake_op_sig = {
+      .op = BuiltinOperator_FLOOR_MOD,
+      .inputs = CreateOpSignatureTensorSpecs(kTfLiteInt16),
   };
   EXPECT_EQ(GetBuiltinOperatorVersion(fake_op_sig), 2);
 }

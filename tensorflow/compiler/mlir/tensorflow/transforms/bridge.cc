@@ -17,12 +17,14 @@ limitations under the License.
 
 #include <memory>
 #include <string>
+#include <utility>
 
 #include "mlir/Dialect/Func/IR/FuncOps.h"  // from @llvm-project
 #include "mlir/IR/BuiltinOps.h"  // from @llvm-project
 #include "mlir/Pass/PassManager.h"  // from @llvm-project
 #include "mlir/Transforms/Passes.h"  // from @llvm-project
 #include "tensorflow/compiler/jit/flags.h"
+#include "tensorflow/compiler/mlir/tensorflow/ir/tf_dialect.h"
 #include "tensorflow/compiler/mlir/tensorflow/transforms/passes.h"
 #include "tensorflow/compiler/mlir/tensorflow/utils/bridge_logger.h"
 #include "tensorflow/compiler/mlir/tensorflow/utils/dump_mlir_util.h"
@@ -54,6 +56,17 @@ namespace {
 tensorflow::Status RunTFXLABridge(
     ModuleOp module, bool enable_logging,
     llvm::function_ref<void(OpPassManager &pm)> pipeline_builder) {
+  // Explicitly check that the TensorFlow dialect can constant fold ops.
+  // Constant folding is essential for the bridge. Without this check, the
+  // bridge may fail with an error that is difficult to understand and not
+  // actionable.
+  if (!TF::TensorFlowDialect::HasConstantFoldHook()) {
+    return tensorflow::errors::Internal(
+        "TensorFlow dialect missing constant fold hook in TFXLA bridge phase "
+        "1; this could happen if the binary doesn't link the constant fold "
+        "hook registration library.");
+  }
+
   PassManager bridge(module.getContext());
   ::tensorflow::applyTensorflowAndCLOptions(bridge);
 
@@ -166,7 +179,7 @@ void CreateTPUBridgePipelineImpl(OpPassManager &pm) {
   }
 
   pm.addPass(TFDevice::CreateMarkOpsForOutsideCompilationPass());
-  pm.addPass(CreateTPUExtractHeadTailOutsideCompilationPass());
+  pm.addPass(TFDevice::CreateExtractHeadTailOutsideCompilationPass());
   pm.addPass(CreateTPUExtractOutsideCompilationPass());
 
   pm.addNestedPass<func::FuncOp>(TFDevice::CreateClusterConstantSinkingPass());
@@ -194,6 +207,7 @@ void CreateTPUBridgePipelineImpl(OpPassManager &pm) {
 }  // namespace
 
 void CreateTPUBridgePipeline(OpPassManager &pm) {
+  pm.addPass(CreateTPUValidateInputsPass());
   pm.addNestedPass<func::FuncOp>(
       TF::CreateCanonicalizeCompileAndReplicateAttributesPass());
   CreateTPUBridgePipelineImpl(pm);
@@ -276,7 +290,9 @@ void AddGraphExportLoweringPasses(OpPassManager &pm) {
   pm.addPass(createSymbolDCEPass());
   if (tensorflow::GetMlirCommonFlags()
           ->tf_mlir_enable_convert_control_to_data_outputs_pass) {
-    pm.addPass(tf_executor::CreateTFExecutorConvertControlToDataOutputsPass());
+    pm.addPass(tf_executor::CreateTFExecutorConvertControlToDataOutputsPass(
+        tensorflow::GetMlirCommonFlags()
+            ->tf_mlir_enable_coarse_data_token_optimization));
   }
   pm.addPass(CreateVerifySuitableForExportPass());
 }
@@ -307,7 +323,9 @@ void AddGraphExportLoweringPassesV2(OpPassManager &pm) {
   pm.addPass(createSymbolDCEPass());
   if (tensorflow::GetMlirCommonFlags()
           ->tf_mlir_enable_convert_control_to_data_outputs_pass) {
-    pm.addPass(tf_executor::CreateTFExecutorConvertControlToDataOutputsPass());
+    pm.addPass(tf_executor::CreateTFExecutorConvertControlToDataOutputsPass(
+        tensorflow::GetMlirCommonFlags()
+            ->tf_mlir_enable_coarse_data_token_optimization));
   }
   pm.addPass(CreateVerifySuitableForExportPass());
 }
@@ -370,6 +388,14 @@ void CreateTFXLABridgePipeline(OpPassManager &pm) {
   pm.addPass(TF::CreateTFShapeInferencePass());
   pm.addNestedPass<func::FuncOp>(createCanonicalizerPass());
   pm.addPass(TFDevice::CreateResourceOpLiftingPass());
+  // TODO(b/267193636): Remove this flag when outside compilation
+  // for generic pipeline is landed.
+  if (tensorflow::GetMlirCommonFlags()
+          ->tf_mlir_enable_generic_outside_compilation) {
+    pm.addPass(TFDevice::CreateMarkOpsForOutsideCompilationPass());
+    pm.addPass(TFDevice::CreateExtractHeadTailOutsideCompilationPass());
+  }
+  // Rewrite cluster functions into XLA  launch ops.
   pm.addPass(TFDevice::CreateXlaRewritePass());
   // Inline the cluster ops.
   pm.addPass(TFDevice::CreateXlaInlineDeviceOpsPass());

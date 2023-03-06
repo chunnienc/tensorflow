@@ -16,6 +16,7 @@ limitations under the License.
 #define TENSORFLOW_CORE_TFRT_EAGER_C_API_TFRT_H_
 
 #include <memory>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -224,7 +225,7 @@ class ContextInterface : public tensorflow::ImmediateExecutionContext {
 
   CoreRuntime* GetCoreRuntime();
   tensorflow::Status BuildFunctionRequestContext(
-      tensorflow::tfrt_stub::OpKernelRunnerTable* runner_table,
+      tensorflow::tfrt_stub::OpKernelRunnerTable* runner_table, int64_t step_id,
       RCReference<tfrt::RequestContext>* request_context);
   tensorflow::Status BuildOpRequestContext(
       RCReference<tfrt::RequestContext>* request_context);
@@ -391,8 +392,10 @@ class TensorHandleInterface
     return ptr->getKind() == kTfrt;
   }
 
+  tensorflow::FullTypeDef FullType() const override { return full_type_; }
+
  private:
-  llvm::Optional<const TensorMetadata*> Metadata() const;
+  std::optional<const TensorMetadata*> Metadata() const;
 
   tensorflow::StatusOr<tensorflow::DataType> ObtainDataTypeFromMetaData(
       const TensorMetadata*) const;
@@ -401,12 +404,14 @@ class TensorHandleInterface
   // is known from the function output signature.
   // Therefore, we can obtain the datatype earlier, before the function
   // execution completes.
-  llvm::Optional<tensorflow::DataType> dtype_;
+  std::optional<tensorflow::DataType> dtype_;
 
   TfrtContext& context_;
 
   // Value of tfrt::TensorHandle.
   Value value_;
+
+  tensorflow::FullTypeDef full_type_;
 };
 
 template <typename T>
@@ -560,8 +565,9 @@ class OperationInterface : public tensorflow::ImmediateExecutionOperation {
     return stack_trace_;
   }
 
-  // Currently not supported.
-  void SetStepId(int64_t step_id) override {}
+  void SetStepId(int64_t step_id) override { step_id_ = step_id; }
+
+  int64_t step_id() { return step_id_; }
 
   // For LLVM style RTTI.
   static bool classof(const AbstractOperation* ptr) {
@@ -578,6 +584,7 @@ class OperationInterface : public tensorflow::ImmediateExecutionOperation {
   // attribute like "T" in order to run device placement logic from current TF.
   void MaybeInferInputAttrs();
 
+  int64_t step_id_ = 0;
   // This field holds a primitive op. If the op represents a function, it
   // will be held by function_state_ below, and this field will be empty.
   CoreRuntimeOp* op_;

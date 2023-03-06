@@ -37,6 +37,7 @@ from tensorflow.python.framework import dtypes
 from tensorflow.python.framework import errors
 from tensorflow.python.framework import ops
 from tensorflow.python.ops import array_ops
+from tensorflow.python.ops import control_flow_assert
 from tensorflow.python.ops import control_flow_ops
 from tensorflow.python.ops import lookup_ops
 from tensorflow.python.ops import resource_variable_ops
@@ -87,7 +88,7 @@ def _unused_handle():
       "Try saving a tf.function with input_signature instead, and file a bug if"
       " there are still issues.")
 
-  assert_op = control_flow_ops.Assert(
+  assert_op = control_flow_assert.Assert(
       array_ops.placeholder_with_default(False, shape=()), [error_message])
   if (not context.executing_eagerly()
      ) and ops.get_default_graph().building_function:
@@ -985,6 +986,9 @@ def load_partial(export_dir, filters, tags=None, options=None):
     with ops.init_scope():
       root = load_v1_in_v2.load(export_dir, tags)
       root.graph_debug_info = debug_info
+  # For privacy concerns, please see the note in
+  #  tensorflow/cc/saved_model/metrics.h
+  metrics.SetReadPath(saved_model_path=str(export_dir))
 
   # Read and log SavedModel checksum, if it is nonzero.
   saved_model_checksum = fingerprinting.MaybeReadSavedModelChecksum(export_dir)

@@ -34,6 +34,7 @@ from tensorflow.python.framework import ops
 from tensorflow.python.framework import sparse_tensor
 from tensorflow.python.framework import tensor_util
 from tensorflow.python.ops import resource_variable_ops
+from tensorflow.python.ops import variables
 
 
 # TODO(allenl): Allow something other than "CUSTOM" so we don't need device
@@ -309,6 +310,9 @@ class DTensorDevice(object):
     """
     if not tensor_util.is_tensor(tensor):
       return False
+    if isinstance(tensor, variables.Variable):
+      # Get the resource handle for tf.Variable
+      tensor = tensor._handle   # pylint: disable=protected-access
     return _pywrap_dtensor_device.IsDTensor(
         context.context()._handle,  # pylint: disable=protected-access
         tensor,
@@ -368,16 +372,20 @@ class DTensorDevice(object):
         self._device_info,
         tpu_core_locations)
 
-  def _get_function_cache_hit_and_miss_count(self):
+  def _get_function_cache_stats(self):
     """Returns the number of cache hit and miss for function compilation.
 
     Returns:
-      A dictionary keyed with miss and hit, corresponding to the cache hit and
+      A dictionary.
+        'miss': number of cache misses;
+        'hit': number of cache hits; and
+        'size': size of cache;
       miss count.
     """
-    return _pywrap_dtensor_device.GetFunctionCacheHitAndMissCount(
+    return _pywrap_dtensor_device.GetFunctionCacheStats(
         context.context()._handle,  # pylint: disable=protected-access,
-        self._device_info)
+        self._device_info,
+    )
 
   def set_iterator_element_layouts(self, iterator_resource_dtensor,
                                    layouts: List[layout_lib.Layout]):

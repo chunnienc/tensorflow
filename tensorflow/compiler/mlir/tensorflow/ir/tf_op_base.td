@@ -48,7 +48,6 @@ TODO: Make invariants more structured so that we can reference them in ops.
   }];
 
   let cppNamespace = "::mlir::TF";
-  let useFoldAPI = kEmitFoldAdaptorFolder;
 }
 
 //===----------------------------------------------------------------------===//
@@ -284,7 +283,7 @@ class TF_TensorFlowAttr <string name, string description> :
          "TensorFlow " # description # " attribute">;
 
 def TF_ShapeAttr : TF_TensorFlowAttr<"Shape", "shape"> {
-  let returnType = "llvm::Optional<llvm::ArrayRef<int64_t>>";
+  let returnType = "std::optional<llvm::ArrayRef<int64_t>>";
   let convertFromStorage = "$_self.cast<mlir::TF::ShapeAttr>().getValue()";
 
   // Create a ranked shape attr by default.
@@ -673,8 +672,10 @@ class WithBroadcastableBinOpBuilder {
     [{
   auto resultType =
       OpTrait::util::getBroadcastedType(x.getType(), y.getType());
-  if (!resultType)
+  if (!resultType) {
     mlir::emitError($_state.location, "non-broadcastable operands");
+    resultType = $_builder.getNoneType();
+  }
   return build($_builder, $_state, resultType, x, y);
 }]>];
 }

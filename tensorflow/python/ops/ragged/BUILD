@@ -28,6 +28,7 @@ py_library(
         ":ragged_config",
         ":ragged_conversion_ops",
         ":ragged_dispatch",
+        ":ragged_embedding_ops",
         ":ragged_factory_ops",
         ":ragged_functional_ops",
         ":ragged_gather_ops",
@@ -150,6 +151,16 @@ py_library(
 )
 
 py_library(
+    name = "ragged_embedding_ops",
+    srcs = ["ragged_embedding_ops.py"],
+    srcs_version = "PY3",
+    deps = [
+        ":ragged_tensor",
+        "//tensorflow/python:embedding_ops",
+    ],
+)
+
+py_library(
     name = "ragged_factory_ops",
     srcs = ["ragged_factory_ops.py"],
     srcs_version = "PY3",
@@ -260,6 +271,7 @@ py_library(
         ":ragged_config",  # fixdeps: keep
         ":ragged_conversion_ops",
         ":ragged_dispatch",
+        ":ragged_embedding_ops",
         ":ragged_factory_ops",
         ":ragged_functional_ops",
         ":ragged_gather_ops",
@@ -436,8 +448,7 @@ py_library(
     deps = [
         "//tensorflow/python:array_ops",
         "//tensorflow/python:check_ops",
-        "//tensorflow/python:dtypes",
-        "//tensorflow/python:framework_ops",
+        "//tensorflow/python:control_flow_ops",
         "//tensorflow/python:math_ops",
         "//tensorflow/python:ragged_math_ops_gen",
     ],
@@ -732,9 +743,6 @@ py_test(
     python_version = "PY3",
     shard_count = 4,
     srcs_version = "PY3",
-    tags = [
-        "notsan",  # TODO(b/170902201): Flaky
-    ],
     deps = [
         ":ragged_factory_ops",
         ":ragged_gather_ops",

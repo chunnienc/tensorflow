@@ -23,6 +23,7 @@ limitations under the License.
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/Dialect/Linalg/Transforms/TilingInterfaceImpl.h"
+#include "mlir/Dialect/SCF/IR/SCF.h"
 #include "mlir/Dialect/Tensor/IR/Tensor.h"
 #include "mlir/Pass/Pass.h"
 #include "mlir/Transforms/GreedyPatternRewriteDriver.h"
@@ -49,7 +50,7 @@ struct TileSortPattern : public OpRewritePattern<SortOp> {
                                 PatternRewriter &rewriter) const override {
     if (hasLabel(op, kSortTransformedLabel)) return failure();
 
-    if (isa<gml_st::ParallelOp, scf::ForOp>(op->getParentOp())) {
+    if (isa<scf::ForallOp, scf::ForOp>(op->getParentOp())) {
       return rewriter.notifyMatchFailure(
           op, "has already been tiled by another pass.");
     }
@@ -97,6 +98,7 @@ struct TransformSortForCpuPass
 
     RewritePatternSet patterns(ctx);
     patterns.add<TileSortPattern>(ctx, tilingOptions);
+    populateCollapseForallOpDimensionsPattern(patterns);
 
     if (failed(applyPatternsAndFoldGreedily(f, std::move(patterns)))) {
       return signalPassFailure();

@@ -1022,15 +1022,18 @@ py_library(
         ":device",
         ":dtypes",
         ":error_interpolation",
+        ":op_callbacks",
         ":op_def_registry",
         ":registry",
         ":tensor_conversion_registry",
         ":tensor_shape",
+        ":tensor_util",
         ":traceable_stack",
         ":type_spec",
         ":versions",
         "//tensorflow/core:protos_all_py",
         "//tensorflow/python:control_flow_util",
+        "//tensorflow/python:handle_data_util",
         "//tensorflow/python:platform",
         "//tensorflow/python:tf2",
         "//tensorflow/python/eager:context",
@@ -1105,7 +1108,11 @@ py_library(
     # TODO(b/266747022): remove extra visibility
     visibility = visibility + ["//learning/brain/experimental:__subpackages__"],
     deps = [
-        "//tensorflow/python/eager:context",
+        ":dtypes",
+        "//tensorflow/python/types",
+        "//tensorflow/python/util",
+        "//tensorflow/python/util:tf_export",
+        "//third_party/py/numpy",
     ],
 )
 
@@ -1116,13 +1123,11 @@ py_library(
     deps = [
         ":auto_control_deps",
         ":composite_tensor",
-        ":constant_op",
         ":dtypes",
         ":errors",
         ":indexed_slices",
         ":ops",
         ":tensor_spec",
-        ":tensor_util",
         ":type_spec",
         "//tensorflow/core:protos_all_py",
         "//tensorflow/core/function/capture:capture_container",
@@ -1134,8 +1139,6 @@ py_library(
         "//tensorflow/python/autograph",
         "//tensorflow/python/eager:context",
         "//tensorflow/python/eager:execute",
-        "//tensorflow/python/eager:graph_only_ops",
-        "//tensorflow/python/eager:tape",
         "//tensorflow/python/platform",
         "//tensorflow/python/saved_model:save_context",
         "//tensorflow/python/util",
@@ -1289,6 +1292,7 @@ py_library(
     srcs_version = "PY3",
     deps = [
         ":tensor_util",
+        "//tensorflow/python:control_flow_case",
         "//tensorflow/python:control_flow_ops",
         "//tensorflow/python:pywrap_tf_session",
     ],
@@ -1426,8 +1430,8 @@ pytype_library(
     deps = [
         ":composite_tensor",
         ":dtypes",
+        ":tensor_conversion_registry",
         ":tensor_shape",
-        ":type_spec_registry",
         "//tensorflow/core:protos_all_py",
         "//tensorflow/core/function/trace_type",
         "//tensorflow/python:platform",
@@ -1718,6 +1722,7 @@ tf_py_test(
         ":error_interpolation",
         ":traceable_stack",
         "//tensorflow/python:client_testlib",
+        "//tensorflow/python:control_flow_assert",
     ],
 )
 
@@ -1759,7 +1764,6 @@ cuda_py_test(
     shard_count = 10,
     tags = [
         "no_rocm",
-        "noasan",
         "optonly",
     ],
     deps = [
@@ -1770,6 +1774,7 @@ cuda_py_test(
         "//tensorflow/python:client",
         "//tensorflow/python:client_testlib",
         "//tensorflow/python:clip_ops",
+        "//tensorflow/python:control_flow_assert",
         "//tensorflow/python:control_flow_ops",
         "//tensorflow/python:functional_ops",
         "//tensorflow/python:gradients",
@@ -2187,7 +2192,10 @@ cuda_py_test(
     srcs = ["test_util_test.py"],
     main = "test_util_test.py",
     python_version = "PY3",
-    tags = ["no_windows"],
+    tags = [
+        "no_pip",
+        "no_windows",
+    ],
     deps = [
         ":combinations",
         ":errors",
@@ -2196,6 +2204,7 @@ cuda_py_test(
         ":test_ops",
         "//tensorflow/core:protos_all_py",
         "//tensorflow/python:array_ops",
+        "//tensorflow/python:control_flow_assert",
         "//tensorflow/python:control_flow_ops",
         "//tensorflow/python:lookup_ops",
         "//tensorflow/python:platform_test",
@@ -2204,6 +2213,7 @@ cuda_py_test(
         "//tensorflow/python:session",
         "//tensorflow/python:variables",
         "//tensorflow/python/eager:context",
+        "//tensorflow/python/util/protobuf:compare_test_proto_py",
         "//third_party/py/numpy",
         "@absl_py//absl/testing:parameterized",
     ],
@@ -2222,7 +2232,6 @@ tf_py_test(
         "no_windows",
         "noasan",  # TODO(b/149948895): Re-enable.
         "nomsan",  # TODO(b/149948895): Re-enable.
-        "notsan",  # TODO(b/149948895): Re-enable.
     ],
     deps = [
         ":test_lib",

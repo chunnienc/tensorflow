@@ -35,6 +35,7 @@ limitations under the License.
 #include "mlir/Dialect/Linalg/IR/Linalg.h"
 #include "mlir/Dialect/Linalg/Transforms/TilingInterfaceImpl.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"
+#include "mlir/Dialect/SCF/Transforms/TileUsingInterface.h"
 #include "mlir/Dialect/Tensor/IR/Tensor.h"
 #include "mlir/Transforms/GreedyPatternRewriteDriver.h"
 
@@ -84,18 +85,35 @@ OpFoldResult computeTileSizeInDim(OpBuilder &builder, Location loc,
       {residualTileSize, tileSize});
 }
 
+// Updates offsets, sizes as functions of ivs and insert parallel_insert_slices
+// into `in_parallel` terminator.
+void calculateTileOffsetsAndSizes(OpBuilder &b, Location loc,
+                                  scf::ForallOp forallOp,
+                                  ArrayRef<OpFoldResult> steps,
+                                  ArrayRef<OpFoldResult> ubs,
+                                  ArrayRef<unsigned> nonemptyRangeIndices,
+                                  SmallVector<OpFoldResult> &offsets,
+                                  SmallVector<OpFoldResult> &sizes) {
+  OpBuilder::InsertionGuard g(b);
+  b.setInsertionPointToStart(forallOp.getBody(0));
+  for (const auto &[index, iv] : llvm::enumerate(forallOp.getInductionVars())) {
+    offsets[nonemptyRangeIndices[index]] = iv;
+    sizes[nonemptyRangeIndices[index]] =
+        computeTileSizeInDim(b, loc, steps[index], ubs[index], iv);
+  }
+}
+
 /// Generate an empty loop nest that represents the tiled loop nest shell.
 /// - `loopRanges` specifies the lb, ub and step of the untiled iteration space.
 /// - `tileSizeVals` is the tile sizes to use. Zero represent untiled loops.
 /// - In `offsets` and `sizes` return the multi-dimensional offset and size of
 /// the tile processed within the inner most loop.
-Operation *generateTileLoopNest(OpBuilder &builder, Location loc,
-                                ArrayRef<Range> loopRanges,
-                                ArrayRef<Value> tileSizeVals,
-                                ArrayRef<Value> dstOperands, bool distribute,
-                                StringRef distributionLabel,
-                                SmallVector<OpFoldResult> &offsets,
-                                SmallVector<OpFoldResult> &sizes) {
+scf::ForallOp generateTileLoopNest(OpBuilder &builder, Location loc,
+                                   ArrayRef<Range> loopRanges,
+                                   ArrayRef<Value> tileSizeVals,
+                                   ArrayRef<Value> dstOperands,
+                                   SmallVector<OpFoldResult> &offsets,
+                                   SmallVector<OpFoldResult> &sizes) {
   assert(!loopRanges.empty() && "expected at least one loop range");
   assert(loopRanges.size() == tileSizeVals.size() &&
          "expected as many tile sizes as loop ranges");
@@ -104,10 +122,8 @@ Operation *generateTileLoopNest(OpBuilder &builder, Location loc,
   SmallVector<OpFoldResult> lbs, ubs, steps;
   SmallVector<unsigned> nonemptyRangeIndices;
   for (auto &loopRange : llvm::enumerate(loopRanges)) {
-    Value offset =
-        getValueOrCreateConstantIndexOp(builder, loc, loopRange.value().offset);
-    Value size =
-        getValueOrCreateConstantIndexOp(builder, loc, loopRange.value().size);
+    OpFoldResult offset = loopRange.value().offset;
+    OpFoldResult size = loopRange.value().size;
     // No loops if tile size is zero. Set offset and size to the loop offset and
     // size.
     offsets.push_back(offset);
@@ -118,45 +134,11 @@ Operation *generateTileLoopNest(OpBuilder &builder, Location loc,
     steps.push_back(tileSizeVals[loopRange.index()]);
     nonemptyRangeIndices.push_back(loopRange.index());
   }
+  auto loop = builder.create<scf::ForallOp>(loc, lbs, ubs, steps, dstOperands,
+                                            std::nullopt);
 
-  auto buildBody = [&](OpBuilder &nestedBuilder, Location bodyLoc,
-                       ValueRange ivs) {
-    for (const auto &[index, iv] : llvm::enumerate(ivs)) {
-      offsets[nonemptyRangeIndices[index]] = iv;
-      sizes[nonemptyRangeIndices[index]] = computeTileSizeInDim(
-          nestedBuilder, bodyLoc, steps[index], ubs[index], iv);
-    }
-  };
-  std::optional<StringAttr> distributionLabelAttr;
-  if (!distributionLabel.empty()) {
-    distributionLabelAttr =
-        StringAttr::get(builder.getContext(), distributionLabel);
-  }
-  Operation *loop =
-      distribute ? builder
-                       .create<gml_st::ParallelOp>(
-                           loc, TypeRange(ValueRange{dstOperands}),
-                           getValueOrCreateConstantIndexOp(builder, loc, lbs),
-                           getValueOrCreateConstantIndexOp(builder, loc, ubs),
-                           getValueOrCreateConstantIndexOp(builder, loc, steps),
-                           dstOperands, distributionLabelAttr,
-                           [&](OpBuilder &nestedBuilder, Location bodyLoc,
-                               ValueRange ivs, ValueRange /*outputs*/) {
-                             buildBody(nestedBuilder, bodyLoc, ivs);
-                           })
-                       .getOperation()
-                 : builder
-                       .create<gml_st::ForOp>(
-                           loc, TypeRange(ValueRange{dstOperands}),
-                           getValueOrCreateConstantIndexOp(builder, loc, lbs),
-                           getValueOrCreateConstantIndexOp(builder, loc, ubs),
-                           getValueOrCreateConstantIndexOp(builder, loc, steps),
-                           dstOperands,
-                           [&](OpBuilder &nestedBuilder, Location bodyLoc,
-                               ValueRange ivs, ValueRange /*inits*/) {
-                             buildBody(nestedBuilder, bodyLoc, ivs);
-                           })
-                       .getOperation();
+  calculateTileOffsetsAndSizes(builder, loc, loop, steps, ubs,
+                               nonemptyRangeIndices, offsets, sizes);
   return loop;
 }
 
@@ -165,31 +147,43 @@ Operation *generateTileLoopNest(OpBuilder &builder, Location loc,
 struct TilingPattern : public OpInterfaceRewritePattern<TilingInterface> {
   TilingPattern(MLIRContext *context,
                 llvm::function_ref<LogicalResult(TilingInterface)> filterFn,
-                TilingOptions options, PatternBenefit benefit = 1)
+                TilingOptions options, bool distribute,
+                PatternBenefit benefit = 1)
       : OpInterfaceRewritePattern<TilingInterface>(context, benefit),
         filterFn(filterFn),
-        options(std::move(options)) {}
+        options(std::move(options)),
+        distribute(distribute) {}
 
   LogicalResult matchAndRewrite(TilingInterface op,
                                 PatternRewriter &rewriter) const override {
     if (!filterFn || failed(filterFn(op)) || hasLabel(op, kTileAppliedLabel))
       return failure();
 
-    auto tilingResult = tileUsingGmlSt(options, rewriter, op);
-    if (failed(tilingResult)) return failure();
+    if (distribute) {
+      auto tilingResult = tileUsingGmlSt(options, rewriter, op);
+      if (failed(tilingResult)) return failure();
 
-    // If we did not tile (e.g. when all tile sizes are 0), do not replace
-    // original op and just mark it as transformed then return.
-    if (tilingResult->loop != nullptr) {
-      rewriter.replaceOp(op, tilingResult->loop->getResults());
+      if (tilingResult->loop != nullptr) {
+        rewriter.replaceOp(op, tilingResult->loop->getResults());
+      }
+      setLabel(tilingResult->tiledOps.front(), kTileAppliedLabel);
+    } else {
+      scf::SCFTilingOptions opts;
+      opts.setTileSizeComputationFunction(options.tileSizeComputationFn);
+      auto tilingResult = scf::tileUsingSCFForOp(rewriter, op, opts);
+      if (failed(tilingResult)) return failure();
+      if (!tilingResult->loops.empty()) {
+        rewriter.replaceOp(op, tilingResult->replacements);
+      }
+      setLabel(tilingResult->tiledOps.front(), kTileAppliedLabel);
     }
-    setLabel(tilingResult->tiledOps.front(), kTileAppliedLabel);
     return success();
   }
 
  private:
   llvm::function_ref<LogicalResult(TilingInterface)> filterFn;
   TilingOptions options;
+  bool distribute;
 };
 
 struct TilingPass : public impl::TilingPassBase<TilingPass> {
@@ -213,7 +207,6 @@ struct TilingPass : public impl::TilingPassBase<TilingPass> {
     MLIRContext *ctx = &getContext();
 
     TilingOptions opts;
-    opts.distribute = distribute;
     SmallVector<int64_t> ts(tileSizes.begin(), tileSizes.end());
     opts.tileSizeComputationFn = [ts](OpBuilder &b, Operation *op) {
       OpBuilder::InsertionGuard guard(b);
@@ -232,7 +225,7 @@ struct TilingPass : public impl::TilingPassBase<TilingPass> {
       return success();
     };
     RewritePatternSet patterns(ctx);
-    populateTilingPatterns(ctx, filterFn, opts, &patterns);
+    patterns.add<TilingPattern>(ctx, filterFn, opts, distribute);
     if (failed(applyPatternsAndFoldGreedily(f, std::move(patterns))))
       return signalPassFailure();
 
@@ -241,25 +234,18 @@ struct TilingPass : public impl::TilingPassBase<TilingPass> {
   }
 };
 
-template <typename LoopTy>
-void insertTerminatorAndUpdateOutputs(PatternRewriter &rewriter,
-                                      const TilingResult &tilingResult,
-                                      SetYieldOp terminator,
-                                      ValueRange dstOperands,
-                                      ValueRange outputTiles) {
-  auto parallelLoop = cast<LoopTy>(tilingResult.loop);
-  rewriter.replaceOpWithNewOp<SetYieldOp>(
-      terminator, tilingResult.tiledOps.front()->getResults(),
-      parallelLoop.getRegionOutputArgs(), outputTiles);
+void updateOutputs(const TilingResult &tilingResult, ValueRange dstOperands) {
+  scf::ForallOp parallelLoop = tilingResult.loop;
 
   if (auto dstOp = dyn_cast<DestinationStyleOpInterface>(
           tilingResult.tiledOps.front())) {
     for (auto [dst, regionArg] :
-         llvm::zip(dstOperands, parallelLoop.getRegionOutputArgs())) {
+         llvm::zip(dstOperands, parallelLoop.getOutputBlockArguments())) {
       dst.replaceUsesWithIf(regionArg, [&](OpOperand &operand) {
         Operation *owner = operand.getOwner();
         return isa<tensor::ExtractSliceOp, TilingInterface>(owner) &&
-               owner->getParentOfType<LoopTy>() == parallelLoop.getOperation();
+               owner->getParentOfType<scf::ForallOp>() ==
+                   parallelLoop.getOperation();
       });
     }
   }
@@ -307,11 +293,12 @@ FailureOr<TilingResult> tileUsingGmlSt(const TilingOptions &options,
     return rewriter.notifyMatchFailure(op, "failed to get destinations");
   SmallVector<OpFoldResult> offsets, sizes;
   TilingResult tilingResult;
-  tilingResult.loop = generateTileLoopNest(
-      rewriter, loc, iterationDomain, tileSizeVector, dstOperands,
-      options.distribute, options.distributionLabel, offsets, sizes);
+  tilingResult.loop =
+      generateTileLoopNest(rewriter, loc, iterationDomain, tileSizeVector,
+                           dstOperands, offsets, sizes);
+
   Block *loopBody = &tilingResult.loop->getRegion(0).front();
-  auto terminator = cast<SetYieldOp>(loopBody->getTerminator());
+  auto terminator = cast<scf::InParallelOp>(loopBody->getTerminator());
   rewriter.setInsertionPoint(terminator);
 
   // 4. Insert the tiled implementation within the loop.
@@ -322,6 +309,7 @@ FailureOr<TilingResult> tileUsingGmlSt(const TilingOptions &options,
   SmallVector<Value> outputTiles;
   auto oneAttr = rewriter.getI64IntegerAttr(1);
   for (const auto &result : llvm::enumerate(op->getResults())) {
+    rewriter.setInsertionPoint(terminator);
     SmallVector<OpFoldResult> resultOffsetsList(numResults),
         resultSizesList(numResults);
     if (failed(op.getResultTilePosition(rewriter, result.index(), offsets,
@@ -330,29 +318,24 @@ FailureOr<TilingResult> tileUsingGmlSt(const TilingOptions &options,
       return rewriter.notifyMatchFailure(
           op, "failed to get slice of result produced");
     }
-    outputTiles.push_back(rewriter.createOrFold<TileOp>(
-        loc, resultOffsetsList, resultSizesList,
-        SmallVector<OpFoldResult>(resultSizesList.size(), oneAttr)));
+    rewriter.setInsertionPointToEnd(terminator.getBody());
+    rewriter.create<tensor::ParallelInsertSliceOp>(
+        loc, tilingResult.tiledOps.front()->getResult(result.index()),
+        tilingResult.loop.getOutputBlockArguments()[result.index()],
+        resultOffsetsList, resultSizesList,
+        SmallVector<OpFoldResult>(resultSizesList.size(), oneAttr));
   }
+  rewriter.setInsertionPoint(tilingResult.loop);
 
-  // 6. Add a `set_yield` terminator, update the uses of `outputs` with the
-  // output bbArgs.
-  if (options.distribute) {
-    insertTerminatorAndUpdateOutputs<ParallelOp>(
-        rewriter, tilingResult, terminator, dstOperands, outputTiles);
-  } else {
-    insertTerminatorAndUpdateOutputs<ForOp>(rewriter, tilingResult, terminator,
-                                            dstOperands, outputTiles);
-  }
+  // 6. Update the uses of `outputs` with the output bbArgs.
+  updateOutputs(tilingResult, dstOperands);
   return tilingResult;
 }
 
 void populateTilingPatterns(
     MLIRContext *context,
     llvm::function_ref<LogicalResult(TilingInterface)> filterFn,
-    const TilingOptions &opts, RewritePatternSet *patterns) {
-  patterns->add<TilingPattern>(context, filterFn, opts);
-}
+    const TilingOptions &opts, RewritePatternSet *patterns) {}
 
 void removeTilingLabels(Operation *op) {
   op->walk([](Operation *op) { removeLabel(op, kTileAppliedLabel); });
@@ -362,6 +345,14 @@ std::unique_ptr<OperationPass<func::FuncOp>> createTilingPass(
     StringRef opName, StringRef opLabel, bool distribute,
     ArrayRef<int64_t> tileSizes) {
   return std::make_unique<TilingPass>(opName, opLabel, distribute, tileSizes);
+}
+
+SmallVector<Value> getYieldedValues(scf::InParallelOp inParallelOp) {
+  return llvm::to_vector(llvm::map_range(
+      inParallelOp.getYieldingOps(), [](Operation &op) -> Value {
+        auto insertSliceOp = cast<tensor::ParallelInsertSliceOp>(&op);
+        return insertSliceOp.getSource();
+      }));
 }
 
 }  // namespace gml_st

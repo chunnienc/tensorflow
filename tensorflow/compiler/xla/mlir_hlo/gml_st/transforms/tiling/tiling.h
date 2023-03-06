@@ -19,7 +19,8 @@ limitations under the License.
 #include <functional>
 #include <string>
 
-#include "mlir/Dialect/SCF/Transforms/TileUsingInterface.h"
+#include "gml_st/IR/gml_st_ops.h"
+#include "mlir/Dialect/SCF/IR/SCF.h"
 #include "mlir/IR/PatternMatch.h"
 #include "mlir/Interfaces/TilingInterface.h"
 
@@ -28,7 +29,7 @@ namespace gml_st {
 
 struct TilingResult {
   SmallVector<Operation *> tiledOps;
-  Operation *loop = nullptr;
+  scf::ForallOp loop = nullptr;
 };
 
 /// Options to use to control tiling.
@@ -40,12 +41,6 @@ struct TilingOptions {
   /// to infer tile sizes statically, e.g. based on an operation's rank, and
   /// also dynamically based, e.g. based on a tensor's shape at runtime.
   TileSizeComputationFn tileSizeComputationFn = nullptr;
-
-  /// If `true`, generate a `gml_st.parallel` loop nest.
-  bool distribute = true;
-
-  // Distribution label to add to the gml_st.parallel op
-  std::string distributionLabel = "";
 
   /// Convenience function to set the `tileSizeComputationFn` to a
   /// function that computes tile sizes from an input vector parameter.
@@ -66,6 +61,10 @@ void populateTilingPatterns(
 
 /// Cleans up attributes from applying above tiling patterns.
 void removeTilingLabels(Operation *op);
+
+/// Extracts all yielded values from scf.in_parallel terminator. It should be
+/// upstreamed.
+SmallVector<Value> getYieldedValues(scf::InParallelOp inParallelOp);
 
 }  // namespace gml_st
 }  // namespace mlir

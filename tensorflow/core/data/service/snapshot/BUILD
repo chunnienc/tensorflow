@@ -167,6 +167,7 @@ cc_library(
         ":file_utils",
         ":path_utils",
         "//tensorflow/core:framework",
+        "//tensorflow/core:lib",
         "//tensorflow/core:protos_all_cc",
         "//tensorflow/core/data:snapshot_utils",
         "//tensorflow/core/data/service:common_proto_cc",
@@ -178,6 +179,24 @@ cc_library(
         "//tensorflow/tsl/platform:status",
         "//tensorflow/tsl/platform:statusor",
         "@com_google_absl//absl/time",
+    ],
+)
+
+tf_cc_test(
+    name = "snapshot_manager_test",
+    size = "small",
+    srcs = ["snapshot_manager_test.cc"],
+    deps = [
+        ":snapshot_manager",
+        "//tensorflow/core:framework",
+        "//tensorflow/core:test",
+        "//tensorflow/core:test_main",
+        "//tensorflow/core/data/service:common_proto_cc",
+        "//tensorflow/core/data/service:dispatcher_proto_cc",
+        "//tensorflow/core/data/service:test_util",
+        "//tensorflow/core/framework:tensor_proto_cc",
+        "//tensorflow/tsl/platform:env",
+        "//tensorflow/tsl/platform:statusor",
     ],
 )
 

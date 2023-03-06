@@ -17,7 +17,7 @@
 import collections as py_collections
 import dataclasses
 import inspect
-from typing import Any, Callable, Hashable, Mapping
+from typing import Any, Callable, Hashable, Mapping, Union
 
 from tensorflow.python.eager import context
 from tensorflow.python.framework import ops
@@ -48,21 +48,96 @@ class CaptureContainer():
   is_by_ref: bool = False
 
 
+class CachedCaptureDict(py_collections.OrderedDict):
+  """A dict like container for captures with cached tuples."""
+
+  def __init__(self, *args, **kwargs):
+    self._tuple_cache = []
+    super().__init__(*args, **kwargs)
+
+  def _recompute_tuple_cache(self):
+    self._tuple_cache = [(
+        c.external, c.internal) for c in self.values()]
+
+  def pop(self, key, default=None):
+    if key in self.keys():
+      ret = super().pop(key, default)
+      self._recompute_tuple_cache()
+      return ret
+    else:
+      return default
+
+  def __setitem__(self, key, value):
+    assert isinstance(value, CaptureContainer)
+    if key in self.keys():
+      super().__setitem__(key, value)
+      self._recompute_tuple_cache()
+    else:
+      super().__setitem__(key, value)
+      self._tuple_cache.append((value.external, value.internal))
+
+  def __delitem__(self, key):
+    super().__delitem__(key)
+    self._recompute_tuple_cache()
+
+  def clear(self):
+    self._tuple_cache = []
+    super().clear()
+
+  @property
+  def tuple_cache(self):
+    return self._tuple_cache
+
+
 class FunctionCaptures(object):
   """A container for all capture usages within FuncGraph."""
 
   def __init__(self):
     # Dict that maps capture identifier -> CaptureContainer
     self._by_ref = py_collections.OrderedDict()
-    self._by_val = py_collections.OrderedDict()
+    self._by_val = CachedCaptureDict()
     # Set of external ops on which the graph has a control dependency
     self.control = object_identity.ObjectIdentitySet()
 
-  def capture_by_val(self,
-                     value: Any,
-                     idf: Hashable = None):
-    """Create a by-value capture if not exists."""
-    raise NotImplementedError()
+  def capture_by_val(
+      self,
+      value: Any,
+      placeholder: core.Tensor = None,
+      idf: Hashable = None
+  ) -> core.Tensor:
+    assert idf == id(value), "By value captures must use id(tensor) as idf."
+    capture = self.add_or_replace(value, placeholder, idf, is_by_ref=False)
+    return capture.internal
+
+  def add_or_replace(
+      self,
+      value: Any,
+      placeholder: core.Tensor,
+      idf: Hashable,
+      is_by_ref: bool = False):
+    """Replace a already exsiting capture, otherwise add it."""
+    capture = CaptureContainer(value, placeholder, idf, is_by_ref)
+    if is_by_ref:
+      self._by_ref[idf] = capture
+    else:
+      self._by_val[idf] = capture
+    return capture
+
+  def pop(self,
+          idf: Hashable,
+          is_by_ref: bool = False) -> Union[core.Tensor, None]:
+    if is_by_ref:
+      return self._by_ref.pop(idf, None)
+    else:
+      return self._by_val.pop(idf, None)
+
+  def reset_captures(self, tensors, placeholders):
+    """Set the captures with the provided list of captures & placeholder."""
+    self._by_val = CachedCaptureDict()
+    for external, internal in zip(tensors, placeholders):
+      idf = id(external)
+      c = CaptureContainer(external, internal, idf)
+      self._by_val[idf] = c
 
   def capture_by_ref(self,
                      lam: Callable[[], Any],
@@ -146,3 +221,7 @@ class FunctionCaptures(object):
   @property
   def by_val_captures(self):
     return self._by_val
+
+  @property
+  def by_val_capture_tuples(self):
+    return self._by_val.tuple_cache

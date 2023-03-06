@@ -24,6 +24,7 @@ limitations under the License.
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/Dialect/Linalg/Transforms/TilingInterfaceImpl.h"
+#include "mlir/Dialect/SCF/IR/SCF.h"
 #include "mlir/Dialect/Tensor/IR/Tensor.h"
 #include "mlir/Pass/Pass.h"
 #include "mlir/Transforms/GreedyPatternRewriteDriver.h"
@@ -40,10 +41,9 @@ constexpr llvm::StringRef kReverseTransformedLabel =
 
 FailureOr<TilingResult> tileReverseAndUpdateResultIfTiled(
     PatternRewriter &rewriter, thlo::ReverseOp &reverseOp,
-    ArrayRef<int64_t> tileSizes, bool distribute) {
+    ArrayRef<int64_t> tileSizes) {
   TilingOptions opts;
   opts.setTileSizeComputationFn(tileSizes);
-  opts.distribute = distribute;
   auto tilingResult = tileUsingGmlSt(
       opts, rewriter, cast<TilingInterface>(reverseOp.getOperation()));
 
@@ -79,37 +79,31 @@ struct ReverseTransformPattern : public OpRewritePattern<thlo::ReverseOp> {
     if (hasLabel(reverseOp, kReverseTransformedLabel))
       return rewriter.notifyMatchFailure(reverseOp,
                                          "has already been transformed.");
-    if (isa<gml_st::ParallelOp, scf::ForOp>(reverseOp->getParentOp())) {
+    if (isa<scf::ForallOp, scf::ForOp>(reverseOp->getParentOp())) {
       return rewriter.notifyMatchFailure(
           reverseOp, "has already been tiled by another pass.");
     }
-
     // Parallel dimension tiling. Tiling will be of the form
     // 1x1x..x1xVectorSize.
     int64_t rank = reverseOp.getInput().getType().getRank();
     auto tilingResult = tileReverseAndUpdateResultIfTiled(
-        rewriter, reverseOp, getTileSizes(rank, vectorSize, false),
-        /*distribute=*/true);
+        rewriter, reverseOp, getTileSizes(rank, vectorSize, false));
 
     // Peel parallel loop.
-    if (auto loop = dyn_cast_or_null<ParallelOp>(tilingResult->loop)) {
-      auto peelingResult = peelAllLoops(loop, rewriter);
+    auto peelingResult = peelAllLoops(tilingResult->loop, rewriter);
 
-      // If last dim is to be reversed.
-      if (llvm::is_contained(reverseOp.getReverseDimensions(), rank - 1)) {
-        // If we have a remaining loop, we tile this to sizes of 1.
-        for (ParallelOp remParLoop : peelingResult.tailLoops) {
-          remParLoop->walk([&](Operation *childOp) {
-            if (isa<thlo::ReverseOp>(childOp)) {
-              auto innerReverseOp = dyn_cast<thlo::ReverseOp>(*childOp);
-              auto secondTiling = tileReverseAndUpdateResultIfTiled(
-                  rewriter, innerReverseOp,
-                  getTileSizes(rank, vectorSize, true),
-                  /*distribute=*/true);
-              setLabel(innerReverseOp, kReverseTransformedLabel);
-            }
-          });
-        }
+    // If last dim is to be reversed.
+    if (llvm::is_contained(reverseOp.getReverseDimensions(), rank - 1)) {
+      // If we have a remaining loop, we tile this to sizes of 1.
+      for (scf::ForallOp remParLoop : peelingResult.tailLoops) {
+        remParLoop->walk([&](Operation *childOp) {
+          if (isa<thlo::ReverseOp>(childOp)) {
+            auto innerReverseOp = dyn_cast<thlo::ReverseOp>(*childOp);
+            auto secondTiling = tileReverseAndUpdateResultIfTiled(
+                rewriter, innerReverseOp, getTileSizes(rank, vectorSize, true));
+            setLabel(innerReverseOp, kReverseTransformedLabel);
+          }
+        });
       }
     }
 
@@ -131,7 +125,7 @@ struct TransformReverseForCpuPass
 
   void getDependentDialects(DialectRegistry &registry) const final {
     registry.insert<mlir::gml_st::GmlStDialect, arith::ArithDialect,
-                    tensor::TensorDialect>();
+                    tensor::TensorDialect, scf::SCFDialect>();
     linalg::registerTilingInterfaceExternalModels(registry);
   }
 
@@ -141,6 +135,7 @@ struct TransformReverseForCpuPass
 
     RewritePatternSet patterns(ctx);
     patterns.add<ReverseTransformPattern>(ctx, vectorSize);
+    populateCollapseForallOpDimensionsPattern(patterns);
 
     if (failed(applyPatternsAndFoldGreedily(f, std::move(patterns)))) {
       return signalPassFailure();

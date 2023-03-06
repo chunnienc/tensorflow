@@ -12,6 +12,9 @@ WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 See the License for the specific language governing permissions and
 limitations under the License.
 ==============================================================================*/
+#include <memory>
+#include <utility>
+
 #include "absl/strings/str_format.h"
 #include "tensorflow/core/framework/op_requires.h"
 #include "tensorflow/core/framework/resource_mgr.h"
@@ -115,6 +118,17 @@ thread::ThreadPool* GetOrCreateBatchThreadsPool() {
 
 class FallbackBatchResource : public tensorflow::serving::BatchResourceBase {
  public:
+  struct FallbackBatchTask : BatchTask {
+    explicit FallbackBatchTask(const tfrt::ExecutionContext& tfrt_exec_ctx)
+        : tfrt_exec_ctx(tfrt_exec_ctx) {}
+    tfrt::ExecutionContext tfrt_exec_ctx;
+
+   protected:
+    std::unique_ptr<BatchTask> CreateDerivedTask() override {
+      return std::make_unique<FallbackBatchTask>(this->tfrt_exec_ctx);
+    }
+  };
+
   static Status Create(int32_t num_batch_threads, int32_t max_batch_size,
                        int32_t batch_timeout_micros,
                        int32_t max_enqueued_batches,
@@ -128,8 +142,17 @@ class FallbackBatchResource : public tensorflow::serving::BatchResourceBase {
     std::shared_ptr<BatcherT> batcher;
     TF_RETURN_IF_ERROR(BatcherT::Create(batcher_options, &batcher));
 
+    const auto* fallback_request_state =
+        exec_ctx.request_ctx()
+            ->GetDataIfExists<KernelFallbackCompatRequestState>();
+    if (!fallback_request_state) {
+      return tensorflow::errors::Internal(
+          "KernelFallbackCompatRequestState not found in RequestContext.");
+    }
+
     resource->reset(new FallbackBatchResource(
-        exec_ctx, std::move(bef_func), std::move(batcher),
+        exec_ctx, *fallback_request_state, std::move(bef_func),
+        std::move(batcher),
         GetBatcherQueueOptions(num_batch_threads, max_batch_size,
                                batch_timeout_micros, max_enqueued_batches,
                                allowed_batch_sizes,
@@ -149,8 +172,17 @@ class FallbackBatchResource : public tensorflow::serving::BatchResourceBase {
     TF_RETURN_IF_ERROR(AdaptiveBatcherT::Create(
         adaptive_shared_batch_scheduler_options, &batcher));
 
+    const auto* fallback_request_state =
+        exec_ctx.request_ctx()
+            ->GetDataIfExists<KernelFallbackCompatRequestState>();
+    if (!fallback_request_state) {
+      return tensorflow::errors::Internal(
+          "KernelFallbackCompatRequestState not found in RequestContext.");
+    }
+
     resource->reset(new FallbackBatchResource(
-        exec_ctx, std::move(bef_func), std::move(batcher),
+        exec_ctx, *fallback_request_state, std::move(bef_func),
+        std::move(batcher),
         GetAdaptiveBatcherQueueOptions(max_batch_size, batch_timeout_micros,
                                        max_enqueued_batches,
                                        true /* enable large batch split */,
@@ -164,22 +196,13 @@ class FallbackBatchResource : public tensorflow::serving::BatchResourceBase {
   const tfrt::Function* bef_func() const { return bef_func_.get(); }
 
  private:
-  struct FallbackBatchTask : BatchTask {
-    explicit FallbackBatchTask(const tfrt::ExecutionContext& tfrt_exec_ctx)
-        : tfrt_exec_ctx(tfrt_exec_ctx) {}
-    tfrt::ExecutionContext tfrt_exec_ctx;
-
-   protected:
-    std::unique_ptr<BatchTask> CreateDerivedTask() override {
-      return std::make_unique<FallbackBatchTask>(this->tfrt_exec_ctx);
-    }
-  };
-
-  FallbackBatchResource(const tfrt::ExecutionContext& exec_ctx,
-                        RCReference<const tfrt::Function> bef_func,
-                        std::shared_ptr<BatcherT> batcher,
-                        const BatcherT::QueueOptions& batcher_queue_options,
-                        ArrayRef<int32_t> allowed_batch_sizes)
+  FallbackBatchResource(
+      const tfrt::ExecutionContext& exec_ctx,
+      const KernelFallbackCompatRequestState& fallback_request_state,
+      RCReference<const tfrt::Function> bef_func,
+      std::shared_ptr<BatcherT> batcher,
+      const BatcherT::QueueOptions& batcher_queue_options,
+      ArrayRef<int32_t> allowed_batch_sizes)
       : BatchResourceBase(
             /*has_process_batch_function=*/true, std::move(batcher),
             batcher_queue_options,
@@ -187,10 +210,13 @@ class FallbackBatchResource : public tensorflow::serving::BatchResourceBase {
                                  allowed_batch_sizes.end())),
         host_ctx_(exec_ctx.host()),
         resource_context_(exec_ctx.resource_context()),
+        runner_table_(fallback_request_state.runner_table()),
+        resource_array_(fallback_request_state.resource_array()),
         bef_func_(std::move(bef_func)) {}
 
   FallbackBatchResource(
       const tfrt::ExecutionContext& exec_ctx,
+      const KernelFallbackCompatRequestState& fallback_request_state,
       RCReference<const tfrt::Function> bef_func,
       std::shared_ptr<AdaptiveBatcherT> batcher,
       const AdaptiveBatcherT::QueueOptions& batcher_queue_options,
@@ -202,6 +228,8 @@ class FallbackBatchResource : public tensorflow::serving::BatchResourceBase {
                                  allowed_batch_sizes.end())),
         host_ctx_(exec_ctx.host()),
         resource_context_(exec_ctx.resource_context()),
+        runner_table_(fallback_request_state.runner_table()),
+        resource_array_(fallback_request_state.resource_array()),
         bef_func_(std::move(bef_func)) {}
 
   void ProcessFuncBatchImpl(
@@ -209,16 +237,10 @@ class FallbackBatchResource : public tensorflow::serving::BatchResourceBase {
       std::vector<Tensor>* combined_outputs,
       std::function<void(const Status&)> done) const override;
 
-  Status CreateBatchTask(OpKernelContext* c,
-                         std::unique_ptr<BatchTask>* output) const override {
-    const tfrt::ExecutionContext* exec_ctx = nullptr;
-    TF_RETURN_IF_ERROR(GetTfrtExecutionContext(c, &exec_ctx));
-    *output = std::make_unique<FallbackBatchTask>(*exec_ctx);
-    return OkStatus();
-  }
-
   HostContext* const host_ctx_;
   tfrt::ResourceContext* const resource_context_;
+  tfrt_stub::OpKernelRunnerTable* runner_table_;
+  FallbackResourceArray* resource_array_;
   RCReference<const tfrt::Function> bef_func_;
 };
 
@@ -412,7 +434,16 @@ void BatchFunctionFallbackKernel::ComputeAsync(OpKernelContext* c,
           "Expected:",
           bef_func_.get()->name(), " Received:", br->bef_func()->name())),
       done);
-  Status status = br->RegisterInput(random::New64(), c, batcher_queue_, done);
+  Status status = br->RegisterInput(
+      random::New64(), c, batcher_queue_,
+      [c]()
+          -> StatusOr<std::unique_ptr<serving::BatchResourceBase::BatchTask>> {
+        const tfrt::ExecutionContext* exec_ctx = nullptr;
+        TF_RETURN_IF_ERROR(GetTfrtExecutionContext(c, &exec_ctx));
+        return {std::make_unique<FallbackBatchResource::FallbackBatchTask>(
+            *exec_ctx)};
+      },
+      done);
   br->Unref();
   OP_REQUIRES_OK_ASYNC(c, status, done);
   // Assume br calls done, so nothing to do here.
@@ -501,7 +532,9 @@ tfrt::AsyncValueRef<tfrt_stub::FallbackTensor> TFTensorToFallbackTensor(
 }
 
 Status SetUpKernelFallbackCompatRequestContextForBatch(
-    tfrt::RequestContextBuilder* builder, tfrt::RequestContext& src_req_ctx) {
+    tfrt::RequestContextBuilder* builder,
+    tfrt_stub::OpKernelRunnerTable* runner_table,
+    FallbackResourceArray* resource_array, tfrt::RequestContext& src_req_ctx) {
   DCHECK(builder);
 
   const auto* src_fallback_request_state =
@@ -521,13 +554,14 @@ Status SetUpKernelFallbackCompatRequestContextForBatch(
       &src_fallback_request_state->process_function_library_runtime();
 
   return SetUpKernelFallbackCompatRequestContext(
-      builder, device_manager, pflr, intra_op_threadpool, session_metadata,
-      /*runner=*/nullptr);
+      builder, device_manager, pflr, runner_table, resource_array,
+      intra_op_threadpool, session_metadata, /*runner=*/nullptr);
 }
 
 StatusOr<RCReference<tfrt::RequestContext>> SetUpRequestContext(
     HostContext* host_ctx, tfrt::ResourceContext* resource_context,
-    tfrt::RequestContext* src_req_ctx) {
+    tfrt_stub::OpKernelRunnerTable* runner_table,
+    FallbackResourceArray* resource_array, tfrt::RequestContext* src_req_ctx) {
   // Using the same logic as in the c'tor of FunctionLibraryRuntime::Options,
   // to avoid clash with any Session-generated step ID. DirectSession and
   // MasterSession generates non-negative step IDs.
@@ -537,7 +571,7 @@ StatusOr<RCReference<tfrt::RequestContext>> SetUpRequestContext(
       host_ctx, resource_context, step_id);
 
   TF_RETURN_IF_ERROR(SetUpKernelFallbackCompatRequestContextForBatch(
-      &request_context_builder, *src_req_ctx));
+      &request_context_builder, runner_table, resource_array, *src_req_ctx));
 
   auto expected_req_ctx = std::move(request_context_builder).build();
   if (!expected_req_ctx) {
@@ -566,7 +600,8 @@ void FallbackBatchResource::ProcessFuncBatchImpl(
   auto& exec_ctx = down_cast<const FallbackBatchTask&>(last_task).tfrt_exec_ctx;
 
   auto statusor =
-      SetUpRequestContext(host_ctx_, resource_context_, exec_ctx.request_ctx());
+      SetUpRequestContext(host_ctx_, resource_context_, runner_table_,
+                          resource_array_, exec_ctx.request_ctx());
   if (!statusor.ok()) {
     done(statusor.status());
     return;
@@ -594,7 +629,7 @@ void FallbackBatchResource::ProcessFuncBatchImpl(
   // threading, although this doesn't match TFRT's threading model. Keeping
   // this behavior for now, should reconsider when we redo the batching
   // kernels.
-  host_ctx_->Await(results);
+  batch_exec_ctx.work_queue().Await(results);
   for (AsyncValue* arg : arguments) {
     arg->DropRef();
   }

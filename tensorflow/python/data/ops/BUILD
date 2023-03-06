@@ -24,6 +24,11 @@ py_library(
 )
 
 py_library(
+    name = "test_mode",
+    srcs = ["test_mode.py"],
+)
+
+py_library(
     name = "batch_op",
     srcs = ["batch_op.py"],
 )
@@ -128,6 +133,7 @@ py_library(
         ":zip_op",
         "//tensorflow/core:protos_all_py",
         "//tensorflow/python:constant_op",
+        "//tensorflow/python:control_flow_assert",
         "//tensorflow/python:control_flow_ops",
         "//tensorflow/python:dataset_ops_gen",
         "//tensorflow/python:dtypes",
@@ -169,6 +175,9 @@ py_library(
 py_library(
     name = "choose_from_datasets_op",
     srcs = ["choose_from_datasets_op.py"],
+    deps = [
+        "//tensorflow/python/types",
+    ],
 )
 
 py_library(
@@ -234,6 +243,9 @@ py_library(
 py_library(
     name = "sample_from_datasets_op",
     srcs = ["sample_from_datasets_op.py"],
+    deps = [
+        "//tensorflow/python/types",
+    ],
 )
 
 py_library(
@@ -366,6 +378,9 @@ py_library(
 py_library(
     name = "zip_op",
     srcs = ["zip_op.py"],
+    deps = [
+        "//tensorflow/python/types",
+    ],
 )
 
 py_library(
@@ -416,6 +431,7 @@ py_library(
     srcs_version = "PY3",
     deps = [
         "//tensorflow/python:util",
+        "//tensorflow/python/data/ops:test_mode",
         "//tensorflow/python/data/util:options",
     ],
 )
@@ -438,6 +454,7 @@ py_library(
         "//tensorflow/python/compat",
         "//tensorflow/python/data/util:convert",
         "//tensorflow/python/framework:type_spec",
+        "//tensorflow/python/types",
         "//tensorflow/python/util:tf_export",
     ],
 )
