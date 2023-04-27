@@ -79,13 +79,10 @@ from tensorflow.python.util.tf_export import kwarg_only
 from tensorflow.python.util.tf_export import tf_export
 
 # TODO(b/218887885): Loaded lazily due to a circular dependency with this file.
-tensor_spec = LazyLoader(
-    "tensor_spec", globals(),
-    "tensorflow.python.framework.tensor_spec")
-ag_ctx = LazyLoader(
-    "ag_ctx", globals(),
-    "tensorflow.python.autograph.core.ag_ctx")
-
+tensor_spec = LazyLoader("tensor_spec", globals(),
+                         "tensorflow.python.framework.tensor_spec")
+ag_ctx = LazyLoader("ag_ctx", globals(),
+                    "tensorflow.python.autograph.core.ag_ctx")
 
 # Temporary global switches determining if we should enable the work-in-progress
 # calls to the C API. These will be removed once all functionality is supported.
@@ -432,8 +429,10 @@ class Tensor(internal.NativeObject, core_tf_types.Tensor):
     self._name = None
 
   def __getattr__(self, name):
-    if name in {"T", "astype", "ravel", "transpose", "reshape", "clip", "size",
-                "tolist", "data"}:
+    if name in {
+        "T", "astype", "ravel", "transpose", "reshape", "clip", "size",
+        "tolist", "data"
+    }:
       # TODO(wangpeng): Export the enable_numpy_behavior knob
       raise AttributeError(
           f"{type(self).__name__} object has no attribute '{name}'. " + """
@@ -1089,8 +1088,8 @@ class _EagerTensorBase(Tensor):
     return self
 
   def __str__(self):
-    return "tf.Tensor(%s, shape=%s, dtype=%s)" % (
-        value_text(self, is_repr=False), self.shape, self.dtype.name)
+    return "tf.Tensor(%s, shape=%s, dtype=%s)" % (value_text(
+        self, is_repr=False), self.shape, self.dtype.name)
 
   def __repr__(self):
     return "<tf.Tensor: shape=%s, dtype=%s, %s>" % (
@@ -1352,12 +1351,11 @@ EagerTensor = tf_export("__internal__.EagerTensor", v1=[])(
 
 @tf_export(v1=["convert_to_tensor"])
 @dispatch.add_dispatch_support
-def convert_to_tensor_v1_with_dispatch(
-    value,
-    dtype=None,
-    name=None,
-    preferred_dtype=None,
-    dtype_hint=None):
+def convert_to_tensor_v1_with_dispatch(value,
+                                       dtype=None,
+                                       name=None,
+                                       preferred_dtype=None,
+                                       dtype_hint=None):
   """Converts the given `value` to a `Tensor`.
 
   This function converts Python objects of various types to `Tensor`
@@ -1407,7 +1405,9 @@ def convert_to_tensor_v1_with_dispatch(
     RuntimeError: If a registered conversion function returns an invalid value.
     ValueError: If the `value` is a tensor not of given `dtype` in graph mode.
   """
-  return convert_to_tensor_v1(value, dtype=dtype, name=name,
+  return convert_to_tensor_v1(value,
+                              dtype=dtype,
+                              name=name,
                               preferred_dtype=preferred_dtype,
                               dtype_hint=dtype_hint)
 
@@ -1425,8 +1425,10 @@ def convert_to_tensor_v1(value,
 
 @tf_export("convert_to_tensor", v1=[])
 @dispatch.add_dispatch_support
-def convert_to_tensor_v2_with_dispatch(
-    value, dtype=None, dtype_hint=None, name=None):
+def convert_to_tensor_v2_with_dispatch(value,
+                                       dtype=None,
+                                       dtype_hint=None,
+                                       name=None):
   """Converts the given `value` to a `Tensor`.
 
   This function converts Python objects of various types to `Tensor`
@@ -1487,18 +1489,19 @@ def convert_to_tensor_v2_with_dispatch(
     RuntimeError: If a registered conversion function returns an invalid value.
     ValueError: If the `value` is a tensor not of given `dtype` in graph mode.
   """
-  return convert_to_tensor_v2(
-      value, dtype=dtype, dtype_hint=dtype_hint, name=name)
+  return convert_to_tensor_v2(value,
+                              dtype=dtype,
+                              dtype_hint=dtype_hint,
+                              name=name)
 
 
 def convert_to_tensor_v2(value, dtype=None, dtype_hint=None, name=None):
   """Converts the given `value` to a `Tensor`."""
-  return convert_to_tensor(
-      value=value,
-      dtype=dtype,
-      name=name,
-      preferred_dtype=dtype_hint,
-      as_ref=False)
+  return convert_to_tensor(value=value,
+                           dtype=dtype,
+                           name=name,
+                           preferred_dtype=dtype_hint,
+                           as_ref=False)
 
 
 def _add_error_prefix(msg, *, name=None):
@@ -1616,8 +1619,10 @@ def convert_to_tensor(value,
     ret = None
     if dtype is None and preferred_dtype is not None:
       try:
-        ret = conversion_func(
-            value, dtype=preferred_dtype, name=name, as_ref=as_ref)
+        ret = conversion_func(value,
+                              dtype=preferred_dtype,
+                              name=name,
+                              as_ref=as_ref)
       except (TypeError, ValueError):
         # Could not coerce the conversion to use the preferred dtype.
         pass
@@ -1700,13 +1705,12 @@ def internal_convert_n_to_tensor(values,
   for i, value in enumerate(values):
     n = None if name is None else "%s_%d" % (name, i)
     ret.append(
-        convert_to_tensor(
-            value,
-            dtype=dtype,
-            name=n,
-            as_ref=as_ref,
-            preferred_dtype=preferred_dtype,
-            ctx=ctx))
+        convert_to_tensor(value,
+                          dtype=dtype,
+                          name=n,
+                          as_ref=as_ref,
+                          preferred_dtype=preferred_dtype,
+                          ctx=ctx))
   return ret
 
 
@@ -1733,12 +1737,11 @@ def convert_n_to_tensor(values, dtype=None, name=None, preferred_dtype=None):
     RuntimeError: If a registered conversion function returns an invalid
       value.
   """
-  return internal_convert_n_to_tensor(
-      values=values,
-      dtype=dtype,
-      name=name,
-      preferred_dtype=preferred_dtype,
-      as_ref=False)
+  return internal_convert_n_to_tensor(values=values,
+                                      dtype=dtype,
+                                      name=name,
+                                      preferred_dtype=preferred_dtype,
+                                      as_ref=False)
 
 
 def convert_to_tensor_or_composite(value, dtype=None, name=None):
@@ -1760,8 +1763,10 @@ def convert_to_tensor_or_composite(value, dtype=None, name=None):
   Raises:
     ValueError: If `dtype` does not match the element type of `value`.
   """
-  return internal_convert_to_tensor_or_composite(
-      value=value, dtype=dtype, name=name, as_ref=False)
+  return internal_convert_to_tensor_or_composite(value=value,
+                                                 dtype=dtype,
+                                                 name=name,
+                                                 as_ref=False)
 
 
 def internal_convert_to_tensor_or_composite(value,
@@ -1838,8 +1843,10 @@ def internal_convert_n_to_tensor_or_composite(values,
     else:
       n = None if name is None else "%s_%d" % (name, i)
       ret.append(
-          internal_convert_to_tensor_or_composite(
-              value, dtype=dtype, name=n, as_ref=as_ref))
+          internal_convert_to_tensor_or_composite(value,
+                                                  dtype=dtype,
+                                                  name=n,
+                                                  as_ref=as_ref))
   return ret
 
 
@@ -1865,8 +1872,10 @@ def convert_n_to_tensor_or_composite(values, dtype=None, name=None):
     RuntimeError: If a registered conversion function returns an invalid
       value.
   """
-  return internal_convert_n_to_tensor_or_composite(
-      values=values, dtype=dtype, name=name, as_ref=False)
+  return internal_convert_n_to_tensor_or_composite(values=values,
+                                                   dtype=dtype,
+                                                   name=name,
+                                                   as_ref=False)
 
 
 def _device_string(dev_spec):
@@ -2646,8 +2655,9 @@ class Operation(object):
 
   def _set_func_list_attr(self, attr_name, func_names):
     """Private method used to set a list(function) attribute in the node_def."""
-    funcs = [attr_value_pb2.NameAttrList(name=func_name)
-             for func_name in func_names]
+    funcs = [
+        attr_value_pb2.NameAttrList(name=func_name) for func_name in func_names
+    ]
     funcs_list = attr_value_pb2.AttrValue.ListValue(func=funcs)
     self._set_attr(attr_name, attr_value_pb2.AttrValue(list=funcs_list))
 
@@ -2773,6 +2783,7 @@ class Operation(object):
         none, the default session will be used.
     """
     _run_using_default_session(self, feed_dict, self.graph, session)
+
 
 # TODO(b/185395742): Clean up usages of _gradient_registry
 gradient_registry = _gradient_registry = registry.Registry("gradient")
@@ -3047,8 +3058,9 @@ _SESSION_RUN_LOCK_GROUP = 1
 
 @tf_contextlib.contextmanager
 def resource_creator_scope(resource_type, resource_creator):
-  with get_default_graph()._resource_creator_scope(resource_type,  # pylint: disable=protected-access
-                                                   resource_creator):
+  with get_default_graph()._resource_creator_scope(
+      resource_type,  # pylint: disable=protected-access
+      resource_creator):
     yield
 
 
@@ -3326,6 +3338,7 @@ class Graph(object):
   @_resource_creator_stack.setter
   def _resource_creator_stack(self, resource_creator_stack):
     self._thread_local._resource_creator_stack = resource_creator_stack
+
   # pylint: enable=protected-access
 
   # Note: this method is private because the API of tf.Graph() is public and
@@ -3519,10 +3532,10 @@ class Graph(object):
     with self._lock:
       with c_api_util.tf_buffer() as buf:
         with self._c_graph.get() as c_graph:
-          pywrap_tf_session.TF_GraphToGraphDef(c_graph, buf)
+          pywrap_tf_session.TF_GraphToFlatGraphDef(c_graph, buf)
           data = pywrap_tf_session.TF_GetBuffer(buf)
-      graph = graph_pb2.GraphDef()
-      graph.ParseFromString(compat.as_bytes(data))
+      graph = c_api_util.parse_from_flat_graph_def(data)
+
       # Strip the experimental library field iff it's empty.
       if not graph.library.function:
         graph.ClearField("library")
@@ -3650,8 +3663,8 @@ class Graph(object):
 
     name = function.name
     # Sanity checks on gradient definition.
-    if (function.grad_func_name is not None) and (function.python_grad_func is
-                                                  not None):
+    if (function.grad_func_name is not None) and (function.python_grad_func
+                                                  is not None):
       raise ValueError("Gradient defined twice for function %s" % name)
 
     # Add function to graph
@@ -3795,15 +3808,14 @@ class Graph(object):
     # _create_op_helper mutates the new Operation. `_mutation_lock` ensures a
     # Session.run call cannot occur between creating and mutating the op.
     with self._mutation_lock():
-      ret = Operation(
-          node_def,
-          self,
-          inputs=inputs,
-          output_types=dtypes,
-          control_inputs=control_inputs,
-          input_types=input_types,
-          original_op=self._default_original_op,
-          op_def=op_def)
+      ret = Operation(node_def,
+                      self,
+                      inputs=inputs,
+                      output_types=dtypes,
+                      control_inputs=control_inputs,
+                      input_types=input_types,
+                      original_op=self._default_original_op,
+                      op_def=op_def)
       self._create_op_helper(ret, compute_device=compute_device)
     return ret
 
@@ -3860,8 +3872,9 @@ class Graph(object):
     # Apply a kernel label if one has been specified for this op type.
     try:
       kernel_label = self._op_to_kernel_label_map[op.type]
-      op._set_attr("_kernel",  # pylint: disable=protected-access
-                   attr_value_pb2.AttrValue(s=compat.as_bytes(kernel_label)))
+      op._set_attr(
+          "_kernel",  # pylint: disable=protected-access
+          attr_value_pb2.AttrValue(s=compat.as_bytes(kernel_label)))
     except KeyError:
       pass
 
@@ -3871,8 +3884,9 @@ class Graph(object):
     # this op type.
     try:
       mapped_op_type = self._gradient_override_map[op.type]
-      op._set_attr("_gradient_op_type",  # pylint: disable=protected-access
-                   attr_value_pb2.AttrValue(s=compat.as_bytes(mapped_op_type)))
+      op._set_attr(
+          "_gradient_op_type",  # pylint: disable=protected-access
+          attr_value_pb2.AttrValue(s=compat.as_bytes(mapped_op_type)))
     except KeyError:
       pass
 
@@ -3906,8 +3920,8 @@ class Graph(object):
       # pylint: disable=protected-access
       op._set_attr(
           "_class",
-          attr_value_pb2.AttrValue(
-              list=attr_value_pb2.AttrValue.ListValue(s=all_colocation_groups)))
+          attr_value_pb2.AttrValue(list=attr_value_pb2.AttrValue.ListValue(
+              s=all_colocation_groups)))
       # pylint: enable=protected-access
 
     # Sets "container" attribute if
@@ -3923,8 +3937,10 @@ class Graph(object):
         pass
       else:
         if not container_attr:
-          op._set_attr("container", attr_value_pb2.AttrValue(  # pylint: disable=protected-access
-              s=compat.as_bytes(self._container)))
+          op._set_attr(
+              "container",
+              attr_value_pb2.AttrValue(  # pylint: disable=protected-access
+                  s=compat.as_bytes(self._container)))
 
   def _add_new_tf_operations(self, compute_devices=True):
     """Creates `Operations` in this graph for any new TF_Operations.
@@ -4605,7 +4621,9 @@ class Graph(object):
     return self._name_stack
 
   @tf_contextlib.contextmanager
-  def _colocate_with_for_gradient(self, op, gradient_uid,
+  def _colocate_with_for_gradient(self,
+                                  op,
+                                  gradient_uid,
                                   ignore_existing=False):
     with self.colocate_with(op, ignore_existing):
       if gradient_uid is not None:
@@ -5214,8 +5232,7 @@ class Graph(object):
     saved_labels = {}
     # Install the given label
     for op_type, label in op_to_kernel_label_map.items():
-      if not (isinstance(op_type, str) and
-              isinstance(label, str)):
+      if not (isinstance(op_type, str) and isinstance(label, str)):
         raise TypeError("op_to_kernel_label_map must be a dictionary mapping "
                         "strings to strings")
       try:
@@ -5291,8 +5308,7 @@ class Graph(object):
     saved_mappings = {}
     # Install the given label
     for op_type, mapped_op_type in op_type_map.items():
-      if not (isinstance(op_type, str) and
-              isinstance(mapped_op_type, str)):
+      if not (isinstance(op_type, str) and isinstance(mapped_op_type, str)):
         raise TypeError("op_type_map must be a dictionary mapping "
                         "strings to strings")
       try:
@@ -5509,6 +5525,7 @@ def device(device_name_or_function):
           "is enabled.")
     return context.device(device_name_or_function)
   elif executing_eagerly_outside_functions():
+
     @tf_contextlib.contextmanager
     def combined(device_name_or_function):
       with get_default_graph().device(device_name_or_function):
@@ -5517,6 +5534,7 @@ def device(device_name_or_function):
             yield
         else:
           yield
+
     return combined(device_name_or_function)
   else:
     return get_default_graph().device(device_name_or_function)
@@ -6082,7 +6100,8 @@ def inside_function():
 
 
 @tf_export(v1=["enable_eager_execution"])
-def enable_eager_execution(config=None, device_policy=None,
+def enable_eager_execution(config=None,
+                           device_policy=None,
                            execution_mode=None):
   """Enables eager execution for the lifetime of this program.
 
@@ -6152,11 +6171,10 @@ def enable_eager_execution(config=None, device_policy=None,
   _api_usage_gauge.get_cell().set(True)
   logging.vlog(1, "Enabling eager execution")
   if context.default_execution_mode != context.EAGER_MODE:
-    return enable_eager_execution_internal(
-        config=config,
-        device_policy=device_policy,
-        execution_mode=execution_mode,
-        server_def=None)
+    return enable_eager_execution_internal(config=config,
+                                           device_policy=device_policy,
+                                           execution_mode=execution_mode,
+                                           server_def=None)
 
 
 @tf_export(v1=["disable_eager_execution"])
@@ -6217,8 +6235,8 @@ def enable_eager_execution_internal(config=None,
         "execution_mode must be one of None, tf.contrib.eager.SYNC, "
         "tf.contrib.eager.ASYNC")
   if context.default_execution_mode == context.GRAPH_MODE:
-    graph_mode_has_been_used = (
-        _default_graph_stack._global_default_graph is not None)  # pylint: disable=protected-access
+    graph_mode_has_been_used = (_default_graph_stack._global_default_graph
+                                is not None)  # pylint: disable=protected-access
     if graph_mode_has_been_used:
       raise ValueError(
           "tf.enable_eager_execution must be called at program startup.")
@@ -6226,11 +6244,11 @@ def enable_eager_execution_internal(config=None,
   # pylint: disable=protected-access
   with context._context_lock:
     if context._context is None:
-      context._set_context_locked(context.Context(
-          config=config,
-          device_policy=device_policy,
-          execution_mode=execution_mode,
-          server_def=server_def))
+      context._set_context_locked(
+          context.Context(config=config,
+                          device_policy=device_policy,
+                          execution_mode=execution_mode,
+                          server_def=server_def))
     elif ((config is not None and config is not context._context._config) or
           (device_policy is not None and
            device_policy is not context._context._device_policy) or
@@ -6804,8 +6822,8 @@ class internal_name_scope_v1(object):  # pylint: disable=invalid-name
       # currently tf.name_scope(None) (values=None then) is sometimes used as
       # an idiom to reset to top scope.
       raise ValueError(
-          "At least one of name (%s) and default_name (%s) must be provided."
-          % (self._name, self._default_name))
+          "At least one of name (%s) and default_name (%s) must be provided." %
+          (self._name, self._default_name))
 
     g = get_default_graph()
     if self._values and not g.building_function:
@@ -6878,8 +6896,10 @@ class name_scope_v1(object):  # pylint: disable=invalid-name
     Raises:
       TypeError: if `default_name` is passed in but not a string.
     """
-    self._name_scope = name_scope(
-        name, default_name, values, skip_on_eager=False)
+    self._name_scope = name_scope(name,
+                                  default_name,
+                                  values,
+                                  skip_on_eager=False)
     self._name = default_name if name is None else name
 
   def __enter__(self):
@@ -7187,7 +7207,6 @@ internal_convert_n_to_tensor_or_indexed_slices = \
     indexed_slices.internal_convert_n_to_tensor_or_indexed_slices
 register_tensor_conversion_function = \
     tensor_conversion_registry.register_tensor_conversion_function
-
 
 # Helper functions for op wrapper modules generated by `python_op_gen`.
 
