@@ -292,10 +292,9 @@ class _EagerDefinedFunction(object):
     # signature, but also in general it's nice not to depend on it.
     with c_api_util.tf_buffer() as buffer_:
       with self._c_func.get() as func:
-        pywrap_tf_session.TF_FunctionToFunctionDef(func, buffer_)
+        pywrap_tf_session.TF_FunctionToFlatFunctionDef(func, buffer_)
       proto_data = pywrap_tf_session.TF_GetBuffer(buffer_)
-    function_def = function_pb2.FunctionDef()
-    function_def.ParseFromString(compat.as_bytes(proto_data))
+    function_def = c_api_util.parse_from_flat_function_def(proto_data)
     return function_def
 
   def add_to_graph(self, g=None, overwrite=False):

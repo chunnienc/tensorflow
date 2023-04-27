@@ -1624,6 +1624,70 @@ void TF_GraphToGraphDef(TF_Graph* graph, TF_Buffer* output_graph_def,
   status->status = MessageToBuffer(def, output_graph_def);
 }
 
+namespace tensorflow {
+
+Status GraphToFlatGraphDefBuffer(GraphDef def, TF_Buffer* out) {
+  LOG(ERROR) << "== GraphToFlatGraphDefBuffer:: START";
+  size_t nodes_buf_size = 0;
+  for (const NodeDef& node : def.node()) {
+    nodes_buf_size += sizeof(size_t) + node.ByteSizeLong();
+  }
+
+  std::vector<uint8> nodes_buf_vec(nodes_buf_size);
+  uint8* nodes_buf_it = nodes_buf_vec.data();
+  for (const NodeDef& node : def.node()) {
+    size_t node_size = node.ByteSizeLong();
+    *reinterpret_cast<size_t*>(nodes_buf_it) = node_size;
+    nodes_buf_it += sizeof(size_t);
+    if (!node.SerializeWithCachedSizesToArray(nodes_buf_it)) {
+      LOG(ERROR) << "== GraphToFlatGraphDefBuffer:: Unable to serialize node";
+      return errors::InvalidArgument("Unable to serialize ", node.GetTypeName(),
+                                     " protocol buffer");
+    }
+    nodes_buf_it += node_size;
+  }
+
+  def.clear_node();
+  size_t graph_info_size = def.ByteSizeLong();
+  size_t tf_buf_size = sizeof(size_t) + graph_info_size + nodes_buf_size;
+
+  uint8* tf_buf = reinterpret_cast<uint8*>(port::Malloc(tf_buf_size));
+  if (tf_buf == nullptr) {
+    LOG(ERROR) << "== GraphToFlatGraphDefBuffer:: Failed to allocate memory to "
+                  "serialize flat graph def";
+    return tensorflow::errors::ResourceExhausted(
+        "Failed to allocate memory to serialize flat graph def");
+  }
+
+  *reinterpret_cast<size_t*>(tf_buf) = graph_info_size;
+  if (!def.SerializeWithCachedSizesToArray(tf_buf + sizeof(size_t))) {
+    port::Free(tf_buf);
+    LOG(ERROR) << "== GraphToFlatGraphDefBuffer::Unable to serialize pb";
+    return errors::InvalidArgument("Unable to serialize ", def.GetTypeName(),
+                                   " protocol buffer");
+  }
+  memcpy(tf_buf + sizeof(size_t) + graph_info_size, nodes_buf_vec.data(),
+         nodes_buf_size);
+  out->data = tf_buf;
+  out->length = tf_buf_size;
+  out->data_deallocator = [](void* data, size_t length) { port::Free(data); };
+  LOG(ERROR) << "== GraphToFlatGraphDefBuffer:: END";
+  return OkStatus();
+}
+
+}  // namespace tensorflow
+
+void TF_GraphToFlatGraphDef(TF_Graph* graph, TF_Buffer* output_flat_graph_def,
+                            TF_Status* status) {
+  GraphDef def;
+  {
+    mutex_lock l(graph->mu);
+    graph->graph.ToGraphDef(&def);
+  }
+  status->status =
+      GraphToFlatGraphDefBuffer(std::move(def), output_flat_graph_def);
+}
+
 void TF_GraphGetOpDef(TF_Graph* graph, const char* op_name,
                       TF_Buffer* output_op_def, TF_Status* status) {
   const OpDef* op_def;
@@ -1803,6 +1867,62 @@ TF_ImportGraphDefResults* TF_GraphImportGraphDefWithResults(
   mutex_lock l(graph->mu);
   GraphImportGraphDefLocked(graph, def, options, results, status);
   if (!status->status.ok()) {
+    delete results;
+    return nullptr;
+  }
+  return results;
+}
+
+namespace tensorflow {
+
+Status ParseGraphFromFlatGraphDefBuffer(const TF_Buffer* flat_graph_def_buffer,
+                                        GraphDef& def) {
+  LOG(ERROR) << "== ParseGraphFromFlatGraphDefBuffer: START";
+  uint8 const* buf =
+      reinterpret_cast<uint8 const*>(flat_graph_def_buffer->data);
+  uint8 const* buf_end = buf + flat_graph_def_buffer->length;
+
+  size_t graph_info_length = *reinterpret_cast<size_t const*>(buf);
+  buf += sizeof(size_t);
+  if (!tensorflow::ParseProtoUnlimited(&def, buf, graph_info_length)) {
+    LOG(ERROR) << "== ParseGraphFromFlatGraphDefBuffer: Invalid GraphDef";
+    return InvalidArgument("Invalid GraphDef");
+  }
+
+  for (buf += graph_info_length; buf < buf_end;) {
+    NodeDef node;
+    size_t node_length = *reinterpret_cast<size_t const*>(buf);
+    buf += sizeof(size_t);
+    if (!tensorflow::ParseProtoUnlimited(&node, buf, node_length)) {
+      LOG(ERROR) << "== ParseGraphFromFlatGraphDefBuffer: Invalid NodeDef";
+      return InvalidArgument("Invalid NodeDef");
+    }
+    *def.add_node() = std::move(node);
+    buf += node_length;
+  }
+  LOG(ERROR) << "== ParseGraphFromFlatGraphDefBuffer: END";
+  return OkStatus();
+}
+
+}  // namespace tensorflow
+
+TF_ImportGraphDefResults* TF_GraphImportFlatGraphDefWithResults(
+    TF_Graph* graph, const TF_Buffer* flat_graph_def,
+    const TF_ImportGraphDefOptions* options, TF_Status* status) {
+  GraphDef def;
+  status->status = ParseGraphFromFlatGraphDefBuffer(flat_graph_def, def);
+  if (!status->status.ok()) {
+    LOG(ERROR) << "TF_GraphImportFlatGraphDefWithResults FAILED "
+                  "ParseGraphFromFlatGraphDefBuffer";
+    return nullptr;
+  }
+
+  auto results = new TF_ImportGraphDefResults();
+  mutex_lock l(graph->mu);
+  GraphImportGraphDefLocked(graph, def, options, results, status);
+  if (!status->status.ok()) {
+    LOG(ERROR) << "TF_GraphImportFlatGraphDefWithResults FAILED "
+                  "GraphImportGraphDefLocked";
     delete results;
     return nullptr;
   }

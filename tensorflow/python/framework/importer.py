@@ -205,7 +205,9 @@ def _ConvertInputMapValues(name, input_map):
   return input_map
 
 
-def _PopulateTFImportGraphDefOptions(options, prefix, input_map,
+def _PopulateTFImportGraphDefOptions(options,
+                                     prefix,
+                                     input_map,
                                      return_elements,
                                      validate_colocation_constraints,
                                      propagate_device_spec=False):
@@ -403,22 +405,22 @@ def import_graph_def(graph_def,
       it refers to an unknown tensor).
   """
   del op_dict
-  return _import_graph_def_internal(
-      graph_def,
-      input_map=input_map,
-      return_elements=return_elements,
-      name=name,
-      producer_op_list=producer_op_list)
+  return _import_graph_def_internal(graph_def,
+                                    input_map=input_map,
+                                    return_elements=return_elements,
+                                    name=name,
+                                    producer_op_list=producer_op_list)
 
 
 def import_graph_def_for_function(  # pylint: disable=invalid-name
-    graph_def, name=None, propagate_device_spec=False):
+    graph_def,
+    name=None,
+    propagate_device_spec=False):
   """Like import_graph_def but does not validate colocation constraints."""
-  return _import_graph_def_internal(
-      graph_def,
-      validate_colocation_constraints=False,
-      name=name,
-      propagate_device_spec=propagate_device_spec)
+  return _import_graph_def_internal(graph_def,
+                                    validate_colocation_constraints=False,
+                                    name=name,
+                                    propagate_device_spec=propagate_device_spec)
 
 
 def _import_graph_def_internal(  # pylint: disable=invalid-name
@@ -504,10 +506,11 @@ def _import_graph_def_internal(  # pylint: disable=invalid-name
   # TF_GraphImportGraphDefWithResults call and mutating the them in
   # _ProcessNewOps.
   with graph._mutation_lock():  # pylint: disable=protected-access
-    with c_api_util.tf_buffer(graph_def.SerializeToString()) as serialized:
+    with c_api_util.tf_buffer(
+        c_api_util.serialize_to_flat_graph_def(graph_def)) as serialized:
       try:
         with graph._c_graph.get() as c_graph:  # pylint: disable=protected-access
-          results = c_api.TF_GraphImportGraphDefWithResults(
+          results = c_api.TF_GraphImportFlatGraphDefWithResults(
               c_graph, serialized, options)
         results = c_api_util.ScopedTFImportGraphDefResults(results)
       except errors.InvalidArgumentError as e:
